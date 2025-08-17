@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# IDE / editor settings
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter / Colab
+.ipynb_checkpoints/
+
+# Model artifacts
+model/adapter/
+*.bin
+*.pt
+*.ckpt
+
+# Logs / temp
+*.log
+*.tmp
+*.swp
+
+# Docker
+*.pid
+*.sock
