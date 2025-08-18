@@ -79,3 +79,25 @@ ai-shipping-agent/
 - Collect 20–40 FAQ pages (DHL, Aramex, UPS, etc.) into `rag/data/`.
 - Build an ingestion script to **chunk → embed → store in Qdrant**.
 - Add `/search` endpoint to test retrieval.
+
+---
+
+## 📚 Day 2 — Ingestion & Search
+
+Today we added the first Retrieval-Augmented Generation (RAG) layer:
+
+- Wrote ingestion pipeline (`rag/ingest.py`):
+  - Loads `.md` files from `rag/data/` (skips `README.md`).
+  - Splits into overlapping character chunks.
+  - Embeds with **BAAI/bge-m3** and stores in local **Qdrant**.
+- Added `/search` endpoint → validates retrieval end-to-end.
+- Indexed **synthetic shipping FAQs & policies** (14 chunks).
+
+### Notes
+- The dataset is **synthetic**, generated with the help of ChatGPT.  
+- Uses placeholder carriers (*Shipping Company A/B/C*) to avoid trademark/legal issues.  
+- Purpose: demo MVP pipeline with realistic structure, but no real data.
+
+### Next Step (Day 3)
+- Hook `/search` results into `/chat` endpoint.
+- Add an LLM layer to produce contextual answers with citations.
