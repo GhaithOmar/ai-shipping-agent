@@ -98,6 +98,26 @@ Today we added the first Retrieval-Augmented Generation (RAG) layer:
 - Uses placeholder carriers (*Shipping Company A/B/C*) to avoid trademark/legal issues.  
 - Purpose: demo MVP pipeline with realistic structure, but no real data.
 
-### Next Step (Day 3)
-- Hook `/search` results into `/chat` endpoint.
-- Add an LLM layer to produce contextual answers with citations.
+## Day 3 — Tiny LoRA (Production Path)
+
+**Data (v0.2):**
+- Sources: Bitext Customer Support (HF), Customer Support on Twitter (Kaggle).
+- Processing: PII scrub, carrier aliasing (Shipping_A/B/C), de-twitterization (strip @handles, URLs, ^tags, “DM us”), near-dup dedup, shipping-intent filter.
+- Rebalanced ratios: Bitext 85%, Kaggle 5%, Synthetic 10%.
+- Format: JSONL with {"input", "assistant_response"} (≤1024 tokens).
+
+**Training:**
+- Base: Llama 3.1 8B Instruct (4-bit).
+- LoRA: r=8, alpha=16, dropout=0.1, targets: attention only (q/k/v/o).
+- Trainer: TRL SFT (legacy API) with HF DataCollatorForLanguageModeling.
+- Output: adapter-only saved under /MyDrive/ai_shipping_agent/lora-llama3.1-8b.
+
+**Eval:**
+- System prefix enforces: ask-before-answer, no links, concise steps, defer facts to RAG.
+- Decoding guardrails: blocked URL/handles/tags, conservative max_new_tokens.
+- Result: clean tone without Twitter artifacts; still requests IDs and avoids live-claiming.
+
+**Next (Day 4):**
+- Scale data to 10–30k (Bitext 70–85%, Kaggle 5–15%, Synthetic 10–20%).
+- 1–2 short epochs; keep RAG as ground-truth at inference.
+- Extended eval (20–30 prompts) and integrate adapter into backend.

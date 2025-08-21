@@ -1,0 +1,64 @@
+datasets:
+  - name: kaggle_twitter
+    kind: "kaggle_csv"
+    path: "data/raw/kaggle_twitter.csv"
+    mapping:
+      user_col: "text"                   # customer tweet text
+      agent_col: "response_text"         # <-- built by the script (company reply)
+      inbound_col: "inbound"             # True = customer inbound; False = company outbound
+      tweet_id_col: "tweet_id"           # unique tweet id
+      response_tweet_id_col: "response_tweet_id"  # id of the company's reply tweet
+
+  - name: bitext_hf
+    kind: "hf"
+    hf_repo: "bitext/Bitext-customer-support-llm-chatbot-training-dataset"
+    split: "train"
+    mapping:
+      user_col: "instruction"
+      agent_col: "response"
+
+output:
+  out_dir: "data/v0.1"
+  mini_size: 2000
+  val_ratio: 0.05
+  max_tokens: 1024
+
+filters:
+  shipping_keywords:
+    - "track"
+    - "tracking"
+    - "delivery"
+    - "delivered"
+    - "carrier"
+    - "customs"
+    - "address"
+    - "wrong address"
+    - "lost"
+    - "damaged"
+    - "ETA"
+    - "parcel"
+    - "package"
+    - "shipment"
+    - "warehouse"
+    - "hub"
+    - "out for delivery"
+
+anonymize:
+  carrier_aliases:
+    - "aramex"
+    - "dhl"
+    - "fedex"
+    - "ups"
+    - "usps"
+    - "royal mail"
+    - "postnl"
+  replace_with: "Shipping_A"
+
+tone:
+  normalize_agent_style: true
+  prepend_steps: true
+
+ratios:
+  bitext_hf: 0.7
+  kaggle_twitter: 0.2
+  synthetic: 0.1
