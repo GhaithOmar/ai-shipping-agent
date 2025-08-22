@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 env/
 venv/
+.env
 
 # IDE / editor settings
 .vscode/
@@ -36,3 +37,6 @@ model/adapter/
 # Docker
 *.pid
 *.sock
+
+# Data file
+*.csv
