@@ -117,7 +117,76 @@ Today we added the first Retrieval-Augmented Generation (RAG) layer:
 - Decoding guardrails: blocked URL/handles/tags, conservative max_new_tokens.
 - Result: clean tone without Twitter artifacts; still requests IDs and avoids live-claiming.
 
-**Next (Day 4):**
-- Scale data to 10–30k (Bitext 70–85%, Kaggle 5–15%, Synthetic 10–20%).
-- 1–2 short epochs; keep RAG as ground-truth at inference.
-- Extended eval (20–30 prompts) and integrate adapter into backend.
+## 🧪 Day 4 — Fine-tune & Inference Integration
+
+**Data v0.2 (20k examples):**
+- Built new supervised set with ~20,000 pairs (17,600 train + 2,400 val).
+- Auto-split logged by the builder and stored to `data/v0.2/` (`mini_sft.jsonl`, `mini_sft_val.jsonl`).
+
+**Training:**
+- LoRA/PEFT SFT using TRL on Colab L4 (24GB), 1 epoch to reduce risk of overfitting.
+- Best run saved; eval loss ≈ **0.77**. Adapters pushed to the Hugging Face Hub (user: **GhaithOmar**).
+
+**Inference / Guardrails:**
+- Implemented `infer_guarded` with deterministic decoding, link suppression, and intent-aware “missing ID” nudge.
+- Added a small rule set to scrub social artifacts and enforce concise bullets.
+
+**Backend wiring:**
+- Created `backend/generation.py` and updated `backend/main.py` to load base + adapter on startup and expose `/chat` with RAG context.
+- Added `tests/smoke/smoke.py` to sanity-check loading, search, and a sample round trip.
+
+**Artifacts to check in:**
+- `configs/data_prep_v02.yaml` (metadata bump to v0.2).
+- `data/v0.2/mini_sft.jsonl` and `mini_sft_val.jsonl`.
+- `backend/generation.py`, updated `backend/main.py`.
+- `tests/smoke/smoke.py`.
+
+---
+
+## 📂 Project Structure (Day 4)
+
+ai-shipping-agent/
+├── backend/
+│   ├── generation.py
+│   ├── main.py
+│   ├── requirements.txt
+│   └── search.py
+├── configs/
+│   ├── data_prep_v01.yaml
+│   └── data_prep_v02.yaml
+├── data/
+│   ├── v0.1/
+│   │   ├── manifest.json
+│   │   ├── mini_sft.jsonl
+│   │   └── mini_sft_val.jsonl
+│   └── v0.2/
+│       ├── manifest.json
+│       ├── mini_sft.jsonl
+│       └── mini_sft_val.jsonl
+├── notebooks/
+│   ├── Day3/Tiny_LoRA_Smoke-Train.ipynb
+│   └── Day4/Full_LoRA_Train.ipynb
+├── qdrant_db/
+│   └── collection/shipping_kb/storage.sqlite
+├── rag/
+│   ├── ingest.py
+│   └── data/
+│       ├── common_policies.md
+│       ├── company_a_faq.md
+│       ├── company_b_faq.md
+│       ├── company_c_faq.md
+│       ├── tracking_status_reference.md
+│       └── README.md
+├── scripts/
+│   └── data_prep/build_sft.py
+└── tests/
+    └── smoke/smoke.py
+
+
+## 🗺️ Day 5 — Plan (Agent Integration)
+
+- Introduce a minimal **LangChain/LangGraph** agent loop (small state machine).
+- Implement tools: `search_kb` (Qdrant), `parse_tracking` (regex), `estimate_eta` (rule table).
+- Integrate the fine-tuned model via the guarded generator and **preserve citations**.
+- Add unit tests for tools + a tiny end-to-end agent test; prep for Docker in Day 7.
+
