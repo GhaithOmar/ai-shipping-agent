@@ -18,30 +18,26 @@ datasets:
       agent_col: "response"
 
 output:
-  out_dir: "data/v0.1"
-  mini_size: 2000
-  val_ratio: 0.05
+  out_dir: "data/v0.2"
+  mini_size: 20000
+  val_ratio: 0.12
   max_tokens: 1024
 
 filters:
   shipping_keywords:
     - "track"
-    - "tracking"
-    - "delivery"
-    - "delivered"
-    - "carrier"
-    - "customs"
-    - "address"
-    - "wrong address"
-    - "lost"
-    - "damaged"
-    - "ETA"
-    - "parcel"
-    - "package"
+    - "order"
     - "shipment"
-    - "warehouse"
-    - "hub"
-    - "out for delivery"
+    - "delivery"
+    - "package"
+    - "waybill"
+    - "courier"
+    - "customs"
+    - "delayed"
+    - "lost"
+    - "address"
+    - "scan"
+
 
 anonymize:
   carrier_aliases:
@@ -59,6 +55,6 @@ tone:
   prepend_steps: true
 
 ratios:
-  bitext_hf: 0.85
-  kaggle_twitter: 0.05
+  bitext_hf: 0.8
+  kaggle_twitter: 0.1
   synthetic: 0.1

@@ -1,0 +1,10 @@
+{
+  "total_pairs": 20000,
+  "train_pairs": 17600,
+  "val_pairs": 2400,
+  "ratios": {
+    "bitext_hf": 0.8,
+    "kaggle_twitter": 0.1,
+    "synthetic": 0.1
+  }
+}
