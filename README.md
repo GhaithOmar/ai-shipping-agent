@@ -183,10 +183,65 @@ ai-shipping-agent/
     └── smoke/smoke.py
 
 
-## 🗺️ Day 5 — Plan (Agent Integration)
+## Day 5 — Agent Integration (LangChain + LangGraph)
 
-- Introduce a minimal **LangChain/LangGraph** agent loop (small state machine).
-- Implement tools: `search_kb` (Qdrant), `parse_tracking` (regex), `estimate_eta` (rule table).
-- Integrate the fine-tuned model via the guarded generator and **preserve citations**.
-- Add unit tests for tools + a tiny end-to-end agent test; prep for Docker in Day 7.
+**What we added**
+- `backend/tools/`:
+  - `search_kb.py`: Qdrant retriever (prefers embedded `qdrant_db/`, soft‑fails to `[]` if unavailable) + `format_citations`.
+  - `parse_tracking.py`: regex extractor for carrier aliases + tracking IDs.
+  - `estimate_eta.py`: rough ETA rules (business days) with GCC/EU region tweaks.
+- `backend/agent/`:
+  - `graph.py`: minimal LangGraph app with nodes:
+    `history_read → understand → tool_router → respond → history_write`.
+    Reuses the existing `infer_guarded` for final text.
+  - `memory.py`: in‑process short‑term memory (last ~6 turns).
+- `backend/main.py`:
+  - Agent toggle: `POST /chat?agent=1` uses the LangGraph path; default `POST /chat` keeps legacy RAG path.
+  - Streaming: `POST /chat/stream` streams the agent’s answer line‑by‑line.
+- Tests:
+  - `tests/agent/test_tools.py`, `tests/agent/test_api_agent.py` + smoke tests; pass even without a model/Qdrant server.
+
+```powershell
+uvicorn backend.main:app --reload
+# Agent path (JSON)
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/chat?agent=1" `
+  -ContentType "application/json" -Body '{"message":"When will my package arrive JO to AE express?"}'
+
+# Legacy search
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/search" `
+  -ContentType "application/json" -Body '{"query":"change address","k":3}'
+
+# Streaming (arrives as a single string in PowerShell)
+$body = '{"message":"Track order 12345 with Shipping_A and give last two scans."}'
+(Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:8000/chat/stream" `
+  -ContentType "application/json" -Body $body).Content
+```
+
+📂 Project Structure (Day 5 — after Agent Integration)
+ai-shipping-agent/
+├── backend/
+│   ├── main.py              # FastAPI app; /chat (legacy + agent toggle), /chat/stream
+│   ├── generation.py        # Guarded inference (LoRA adapter + safety rules)
+│   ├── settings.py          # Pydantic settings loader (.env support)
+│   ├── search.py            # Legacy RAG search helper (kept for compatibility)
+│   ├── agent/
+│   │   ├── graph.py         # LangGraph state machine (understand → tool_router → respond + memory)
+│   │   └── memory.py        # Short-term in-process memory (last 6 turns)
+│   └── tools/
+│       ├── search_kb.py     # Qdrant semantic search retriever + citation formatter
+│       ├── parse_tracking.py# Regex parser for carrier + tracking IDs
+│       └── estimate_eta.py  # Simple ETA rules (business-day estimates)
+├── rag/
+│   └── ingest.py            # Ingestion pipeline → builds qdrant_db/ from markdown data
+├── qdrant_db/               # Embedded Qdrant collection (local persistence)
+├── tests/
+│   ├── agent/               # Unit tests (tools + API agent branch)
+│   └── smoke/               # Smoke tests (model, RAG, agent path)
+├── configs/                 # Dataset prep configs (v0.1, v0.2 YAMLs)
+├── data/                    # Training/eval datasets (v0.1, v0.2 JSONL)
+├── notebooks/               # Colab notebooks (LoRA training runs)
+├── scripts/                 # Data prep scripts
+├── README.md
+└── .env.example             # Example environment variables
+**Run (PowerShell)**
 
