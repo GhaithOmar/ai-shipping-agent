@@ -144,7 +144,7 @@ Today we added the first Retrieval-Augmented Generation (RAG) layer:
 ---
 
 ## 📂 Project Structure (Day 4)
-
+```text
 ai-shipping-agent/
 ├── backend/
 │   ├── generation.py
@@ -181,7 +181,7 @@ ai-shipping-agent/
 │   └── data_prep/build_sft.py
 └── tests/
     └── smoke/smoke.py
-
+```
 
 ## Day 5 — Agent Integration (LangChain + LangGraph)
 
@@ -218,6 +218,7 @@ $body = '{"message":"Track order 12345 with Shipping_A and give last two scans."
 ```
 
 📂 Project Structure (Day 5 — after Agent Integration)
+```text
 ai-shipping-agent/
 ├── backend/
 │   ├── main.py              # FastAPI app; /chat (legacy + agent toggle), /chat/stream
@@ -245,3 +246,43 @@ ai-shipping-agent/
 └── .env.example             # Example environment variables
 **Run (PowerShell)**
 
+```
+
+## 🔮 Limitations & Future Work
+
+This project was built as a **portfolio showcase** to demonstrate the end-to-end design of an AI shipping support agent. While it integrates retrieval, fine-tuned generation, and agent orchestration, there are some known limitations and clear paths for future work.
+
+### 📉 Current Limitations
+- **Data realism**  
+  - FAQ knowledge base content is **synthetic**, generated to resemble real carrier FAQs and policies.  
+  - Fine-tuning data combines public **Customer Support Twitter (Kaggle)** and **Bitext datasets**, with preprocessing for PII scrub + carrier aliasing.  
+  - These datasets approximate real support conversations but are **not production carrier data**.
+
+- **Model deployment**  
+  - The LoRA-fine-tuned **Llama-3.1-8B Instruct** is tested successfully offline (Colab / local GPU).  
+  - Due to GPU cost constraints, the LoRA adapter is **not hosted live**. Online demos may instead route to a base model API (e.g., Together/Fireworks) while preserving the pipeline.
+
+- **Evaluation**  
+  - Current testing relies on smoke tests and qualitative inspection.  
+  - No large-scale **RAGAS** or structured human evaluation has been performed yet.
+
+### 🚀 Future Work
+- **Data improvements** → Incorporate real carrier datasets (FAQs, scan events, policies) for higher realism.  
+- **Scalable deployment** → Host fine-tuned model + retriever via GPU cloud infra (AWS/GCP/RunPod) with Docker/K8s.  
+- **Evaluation framework** → Add automated metrics (context precision/recall, answer faithfulness) and human eval.  
+- **Additional tools** → Extend agent with rate quote, pickup scheduling, and customs clearance calculators.  
+- **Monitoring & guardrails** → Add observability, tracing, and stronger safety filters for production reliability.  
+
+---
+
+## 📌 Project Status
+
+This repository represents a **research prototype and learning project**, not a production-ready system.  
+It demonstrates the following end-to-end skills:  
+- Data curation & preprocessing (synthetic + public datasets).  
+- LoRA fine-tuning on Llama-3.1-8B with guardrails.  
+- RAG integration with Qdrant + semantic search.  
+- Agent orchestration with LangGraph and tool-calling.  
+- FastAPI backend + Docker packaging.  
+
+⚠️ **Disclaimer:** Since the project uses synthetic and public datasets, and the fine-tuned model is not hosted live, results should be considered illustrative only.  
