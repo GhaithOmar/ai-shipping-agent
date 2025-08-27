@@ -26,11 +26,14 @@ def search(query: str, k: int = 5) -> List[Dict]:
     results = []
     for h in hits:
         payload = h.payload or {}
+        # inside the loop where you build each hit dict
         results.append(
-            {
-                "text": payload.get("text", ""),
-                "source": payload.get("source", ""),
-                "score": float(h.score),
-            }
-        )
+        {
+            "text": payload.get("text", ""),
+            "source": payload.get("source", "") or payload.get("file", ""),
+            "chunk_id": str(getattr(h, "id", "") or payload.get("chunk_id") or ""),
+            "score": float(h.score),
+        }
+    )
+
     return results

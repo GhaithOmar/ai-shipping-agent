@@ -79,6 +79,14 @@ def search_kb(query: str, k: int = 4, carrier: str | None = None) -> List[KBHit]
             with_payload=True,
             query_filter=qfilter,
         ).points
+        if not points and qfilter is not None:
+            # Retry unfiltered to avoid empty results when 'carrier' isn’t in payload
+            points = cli.query_points(
+                collection_name=QDRANT_COLLECTION,
+                query=emb,
+                limit=k,
+                with_payload=True,
+            ).points
     except Exception:
         # If anything goes wrong (e.g., collection missing), fail soft
         return []
@@ -86,23 +94,39 @@ def search_kb(query: str, k: int = 4, carrier: str | None = None) -> List[KBHit]
     hits: List[KBHit] = []
     for p in points:
         payload = p.payload or {}
+        src = payload.get("source") or payload.get("file") or "kb"
+        chunk_id = str(payload.get("chunk_id") or getattr(p, "id", "") or "")
         hits.append(
             KBHit(
                 text=payload.get("text", ""),
-                score=float(p.score),
-                source=payload.get("source") or payload.get("file"),
-                chunk_id=str(payload.get("chunk_id") or payload.get("id") or ""),
+                score=float(getattr(p, "score", 0.0) or 0.0),
+                source=src,
+                chunk_id=chunk_id,
                 meta=payload,
             )
         )
+
     return hits
 
-def format_citations(hits: List[KBHit]) -> List[Dict[str, str]]:
-    """Convert hits to a compact citation list for responses."""
-    out = []
+
+
+def format_citations(hits: List[KBHit]) -> List[Dict[str, Any]]:
+    """Dict citations for internal agent state: [{'ref': 'source#chunk', 'score': 0.87}, ...]."""
+    out: List[Dict[str, Any]] = []
     for h in hits:
         label = h.source or "kb"
         if h.chunk_id:
             label = f"{label}#{h.chunk_id}"
-        out.append({"ref": label, "score": f"{h.score:.3f}"})
+        out.append({"ref": label, "score": float(h.score)})
     return out
+
+def format_citation_strings(hits: List[KBHit]) -> List[str]:
+    """String citations for API responses: ['source#chunk', ...]."""
+    out: List[str] = []
+    for h in hits:
+        label = h.source or "kb"
+        if h.chunk_id:
+            label = f"{label}#{h.chunk_id}"
+        out.append(label)
+    return out
+

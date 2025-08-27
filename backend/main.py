@@ -2,6 +2,7 @@
 from typing import List, Optional
 import os
 import logging
+import json, time
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -12,13 +13,12 @@ from backend.agent.graph import build_graph, run_agent
 from fastapi.responses import StreamingResponse
 import asyncio
 
-
 # RAG search (kept as-is)
 from backend.search import search as vector_search
 
 # Guarded generation + loader
-from backend.generation import load_model_and_tokenizer, infer_guarded
-
+from backend.generation import load_model_and_tokenizer, infer_guarded, stream_guarded 
+from backend.settings import settings
 from dotenv import load_dotenv
 
 load_dotenv()  # loads variables from .env at repo root
@@ -38,6 +38,18 @@ HF_TOKEN   = os.getenv("HUGGINGFACE_TOKEN", None)
 
 # Optional non-gated fallback if loading the above fails and ADAPTER_ID is empty.
 FALLBACK_BASE = os.getenv("FALLBACK_BASE", "Qwen/Qwen2.5-3B-Instruct")
+
+def _ascii_safe(s: str) -> str:
+    if not s:
+        return s
+    table = {"–":"-","—":"-","−":"-","→":"->","←":"<-","’":"'","‘":"'","“":'"',"”":'"',"…":"...","\u00A0":" "}
+    for k,v in table.items():
+        s = s.replace(k,v)
+    return s
+
+def _sse(data: dict, event: str = "message") -> bytes:
+    return (f"event: {event}\n" f"data: {json.dumps(data, ensure_ascii=False)}\n\n").encode("utf-8")
+
 
 # ========= Load model once =========
 tok_backend = None
@@ -103,6 +115,34 @@ def _build_agent():
 
     agent_app = build_graph(generate_fn)
 
+def _offline_legacy_reply(user_msg: str, top_k: int = 2):
+    # lightweight KB pull
+    hits = vector_search(user_msg, k=top_k) if top_k else []
+    try:
+        from backend.tools.parse_tracking import parse_tracking
+    except Exception:
+        # if tools module path differs in your repo, adjust import
+        from backend.parse_tracking import parse_tracking  # fallback
+
+    parsed = parse_tracking(user_msg)
+    ids = parsed.get("ids") or []
+    bullets = []
+    if not ids:
+        bullets.append("Please share your tracking/waybill ID (and carrier if known).")
+    if hits:
+        bullets.append(f"Using {len(hits)} handbook chunk(s) from the knowledge base.")
+    bullets.append("No live tracking is used; info is handbook-based.")
+
+    answer = "\n".join(f"- {b}" for b in bullets)
+    citations = []
+    for h in hits:
+        src = h.get("source") or ""
+        chk = str(h.get("chunk_id") or h.get("id") or "")
+        label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+        citations.append(label)
+
+    return answer, citations
+
 
 # Build if enabled (via env var from settings or default True)
 try:
@@ -111,6 +151,7 @@ try:
 except Exception as e:
     log.error(f"Agent graph build failed (will fall back to legacy path): {e}")
     agent_app = None
+
 
 
 async def _stream_answer_chunks(text: str, delay_s: float = 0.02):
@@ -152,12 +193,18 @@ def health():
         "status": "ok",
         "base_model": BASE_MODEL,
         "adapter": ADAPTER_ID or "",
+        "agent_enabled": bool(settings.agent_enable),  
+        "agent_loaded": bool(agent_app is not None),   
     }
+
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(
     req: ChatRequest,
-    agent: Optional[int] = Query(default=0, description="Set 1 to use LangGraph agent"),
+    agent: Optional[int] = Query(
+        default=1 if settings.agent_enable else 0,  # default from settings
+        description="Set 1 to use LangGraph agent"
+    ),
 ):
     if agent and agent_app is None:
         # Agent requested but not available → soft fallback to legacy RAG
@@ -165,7 +212,6 @@ def chat(
 
     # ===== Agent path =====
     if agent and agent_app is not None:
-        # Run the graph
         final_state = run_agent(agent_app, req.message)
 
         # citations in agent path (if any) come as list of dicts -> stringify
@@ -175,27 +221,37 @@ def chat(
             if ref:
                 citations.append(ref)
 
+        # fallback from kb_hits if citations empty
+        if not citations:
+            for h in final_state.get("kb_hits", []):
+                src = h.get("source") or ""
+                chk = str(h.get("chunk_id") or h.get("id") or "")
+                label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+                citations.append(label)
+
         answer = final_state.get("answer", "")
         return ChatResponse(answer=answer, citations=citations)
 
+
     # ===== Legacy RAG path (existing behavior) =====
-    if tok_backend is None or model_backend is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    if agent == 0:
+        if model_backend is None or tok_backend is None:
+            # NEW: offline fallback instead of raising "Model not loaded"
+            ans, cits = _offline_legacy_reply(req.message, getattr(req, "top_k", 2))
+            return ChatResponse(answer=ans, citations=cits)
+    
 
     hits = vector_search(req.message, req.top_k)
 
     contexts: List[str] = []
-    citations: List[str] = []
+    citations = []
     for h in hits:
-        if isinstance(h, str):
-            contexts.append(h); citations.append("")
-        elif isinstance(h, dict):
-            contexts.append(h.get("text") or h.get("chunk") or "")
-            citations.append(h.get("source") or h.get("id") or "")
-        else:
-            txt = getattr(h, "text", "") or getattr(h, "chunk", "") or str(h)
-            src = getattr(h, "source", "") or getattr(h, "id", "")
-            contexts.append(txt); citations.append(src)
+        src = h.get("source") or ""
+        chk = h.get("chunk_id") or h.get("id") or ""
+        label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+        citations.append(label)
+
+
 
     answer = infer_guarded(
         user_msg=req.message,
@@ -213,14 +269,97 @@ def search_api(req: SearchRequest):
     return {"results": hits}
 
 @app.post("/chat/stream")
-def chat_stream(req: ChatRequest, agent: Optional[int] = Query(1)):
-    if not agent or agent_app is None:
-        raise HTTPException(status_code=400, detail="Streaming is only supported for agent=1 right now.")
+def chat_stream(req: ChatRequest, agent: Optional[int] = Query(default=1 if settings.agent_enable else 0)):
+    """
+    Server-Sent Events (SSE) stream:
+      - start   {meta}
+      - token   {token}
+      - end     {citations}
+    """
+    def legacy_stream():
+        # 1) Build retrieval context + citations
+        hits = vector_search(req.message, k=getattr(req, "top_k", 2) or 2)
+        contexts, citations = [], []
+        for h in hits:
+            txt = h.get("text") or ""
+            src = h.get("source") or ""
+            chk = str(h.get("chunk_id") or h.get("id") or "")
+            contexts.append(txt)
+            label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+            citations.append(label)
 
-    # Run the graph to get final state
-    final_state = run_agent(agent_app, req.message)
-    answer = final_state.get("answer", "")
-    if not isinstance(answer, str):
-        answer = str(answer)
+        # 2) Parse tracking ID
+        try:
+            from backend.tools.parse_tracking import parse_tracking
+        except Exception:
+            from backend.parse_tracking import parse_tracking
+        parsed = parse_tracking(req.message)
+        ids = parsed.get("ids") or []
+        tracking_id = ids[0] if ids else None
 
-    return StreamingResponse(_stream_answer_chunks(answer), media_type="text/plain")
+        # 3) Token streaming with offline fallback
+        def gen():
+            yield _sse({"status": "start", "agent": False, "citations": []}, "start")
+
+            try:
+                # if model is missing, force offline path
+                if model_backend is None or tok_backend is None:
+                    raise RuntimeError("Model not loaded")
+
+                # real token-by-token streaming
+                for token in stream_guarded(req.message, contexts[:4], tracking_id):
+                    yield _sse({"token": _ascii_safe(token)}, "token")
+
+            except Exception:
+                # OFFLINE FALLBACK: build a safe text and stream it in small chunks
+                ans, cits_off = _offline_legacy_reply(req.message, getattr(req, "top_k", 2))
+                text = _ascii_safe(ans or "")
+                CHUNK = 48
+                for i in range(0, len(text), CHUNK):
+                    yield _sse({"token": text[i:i+CHUNK]}, "token")
+                # prefer offline citations if present, else the earlier retrieval labels
+                nonlocal citations
+                if cits_off:
+                    citations = cits_off
+
+            yield _sse({"citations": citations}, "end")
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+    def agent_stream():
+        # Keep agent path working; stream in chunks (answer already composed by the graph)
+        if agent_app is None:
+            # fallback to legacy if agent not built
+            return legacy_stream()
+
+        final_state = run_agent(agent_app, req.message)
+
+        # citations from state (dicts with 'ref') → strings
+        citations = []
+        for c in final_state.get("citations", []):
+            ref = c.get("ref") if isinstance(c, dict) else str(c)
+            if ref:
+                citations.append(ref)
+        if not citations:
+            for h in final_state.get("kb_hits", []):
+                src = h.get("source") or ""
+                chk = str(h.get("chunk_id") or h.get("id") or "")
+                label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+                citations.append(label)
+
+        answer = _ascii_safe(final_state.get("answer", "").strip())
+
+        def gen():
+            yield _sse({"status": "start", "agent": True, "citations": []}, "start")
+            # stream the composed text in small chunks
+            CHUNK = 32
+            for i in range(0, len(answer), CHUNK):
+                yield _sse({"token": answer[i:i+CHUNK]}, "token")
+                time.sleep(0.01)
+            yield _sse({"citations": citations}, "end")
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    # route to agent or legacy
+    return agent_stream() if agent else legacy_stream()

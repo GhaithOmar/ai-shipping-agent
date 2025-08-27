@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional, Callable, Literal
 from typing_extensions import TypedDict
 from dataclasses import asdict
+from backend.search import search as vector_search  # legacy fallback search
+
 
 from langgraph.graph import StateGraph, START, END
 
@@ -9,10 +11,25 @@ from langgraph.graph import StateGraph, START, END
 from backend.tools.search_kb import search_kb, format_citations, KBHit
 from backend.tools.parse_tracking import parse_tracking
 from backend.tools.estimate_eta import estimate_eta
+from backend.tools.rate_quote import rate_quote
 
 # Memory 
 from backend.agent.memory import ShortMemory
 _memory = ShortMemory(max_turns=6)
+
+# Helper function
+def _ascii_safe(s: str) -> str:
+    if not s:
+        return s
+    table = {
+        "–": "-", "—": "-", "−": "-",
+        "→": "->", "←": "<-",
+        "’": "'", "‘": "'", "“": '"', "”": '"',
+        "…": "...", "\u00A0": " ",
+    }
+    for k, v in table.items():
+        s = s.replace(k, v)
+    return s
 
 # -------- Agent State --------
 class AgentState(TypedDict, total=False):
@@ -28,6 +45,7 @@ class AgentState(TypedDict, total=False):
     # final
     answer: str
     history: List[str]
+    rate: Dict[str, Any]              # rate_quote result
 
 # Type of the generation function we’ll receive from the backend
 GenerateFn = Callable[[str, List[str], Optional[str]], str]
@@ -42,12 +60,17 @@ def node_understand(state: AgentState) -> AgentState:
     parsed = parse_tracking(msg)
     needs: List[str] = []
 
-    # If user asked about tracking/scan/where is my package: want retrieval too
+    # If user asked about tracking/scan/quote/where is my package: want retrieval too
     lower = msg.lower()
     intents = {
         "needs_eta": any(k in lower for k in ["eta", "how long", "when arrive", "delivery time"]),
-        "needs_tracking": any(k in lower for k in ["track", "tracking", "scan", "status"])
+        "needs_tracking": any(k in lower for k in ["track", "tracking", "scan", "status"]),
+        "needs_quote": any(k in lower for k in ["quote", "rate", "price", "how much", "shipping cost", "label price"])  # NEW
     }
+
+    if intents["needs_quote"]:
+        needs.append("quote")
+
 
     if intents["needs_tracking"]:
         needs.append("retrieval")
@@ -73,8 +96,21 @@ def node_tool_router(state: AgentState) -> AgentState:
     if "retrieval" in needs:
         carrier = state.get("parsed", {}).get("carrier")
         kb_hits = search_kb(msg, k=4, carrier=carrier)
+
+        # NEW: fallback — if Qdrant returns nothing, try legacy vector_search
+        if not kb_hits:
+            legacy = vector_search(msg, k=4)
+            kb_hits = []
+            for h in legacy:
+                txt = h.get("text") or h.get("chunk") or ""
+                src = h.get("source") or ""
+                chk = str(h.get("chunk_id") or h.get("id") or "")
+                kb_hits.append(KBHit(text=txt, score=float(h.get("score", 0.0) or 0.0),
+                                     source=src, chunk_id=chk, meta=h))
+
         state["kb_hits"] = [asdict(h) for h in kb_hits]
         state["citations"] = format_citations(kb_hits)
+
 
     # 2) ETA estimate (try only if user asked)
     if "eta" in needs:
@@ -90,47 +126,94 @@ def node_tool_router(state: AgentState) -> AgentState:
                 lvl = key
                 break
         state["eta"] = estimate_eta(origin_cc, dest_cc, lvl)
+    # 3) Rate quote (only if asked)
+    if "quote" in needs:
+        # naive parse for weight and dims; in real app we would add a tiny parser.
+        # for now, assume we extract something later; here we demo with safe defaults and let the model ask for missing info.
+        rate = rate_quote(
+            origin_cc=state.get("origin_cc", "JO"),
+            dest_cc=state.get("dest_cc", "AE"),
+            weight_kg=state.get("weight_kg", 1.0),
+            dims_cm=state.get("dims_cm"),   # (L,W,H) if detected, else None
+            service_level="standard",
+        )
+        state["rate"] = rate
+
+    state["citations"] = format_citations(kb_hits)  # list[dict] with 'ref'
+
 
     return state
 
+from typing import List  # ensure this import exists at top of file
+
 def node_respond(state: AgentState, generate_fn: GenerateFn) -> AgentState:
-    """Call your guarded generator with the retrieved context & parsed IDs."""
+    """Call the guarded generator, then append ETA/Rate/Parsed-ID bullets."""
+    # 1) Build context for the generator
     top_k_context: List[str] = []
     for h in state.get("kb_hits", []):
         txt = h.get("text") or ""
         if txt:
             top_k_context.append(txt)
-    top_k_context = top_k_context[:4]
 
-    # Provide a stitched “context note” for ETA if present (keeps single call)
-    if "eta" in state:
-        eta = state["eta"]
-        note = (
-            f"ETA rough handbook estimate (business days): "
-            f"{eta['eta_business_days']['min']}–{eta['eta_business_days']['max']} "
+    # add a compact ETA note into context (helps the model phrase it correctly)
+    eta = state.get("eta")
+    if eta:
+        top_k_context.append(
+            f"ETA handbook estimate: {eta['eta_business_days']['min']}–{eta['eta_business_days']['max']} business days "
             f"for {eta['service_level']} from {eta['origin_cc']} to {eta['dest_cc']}. "
-            f"Always clarify that this is not live tracking."
+            f"Clarify that this is not live tracking."
         )
-        top_k_context.append(note)
-
-    tracking_id = None
-    parsed = state.get("parsed", {})
-    ids = parsed.get("ids") or []
-    if ids:
-        tracking_id = ids[0]  # single-ID path; model will ask if multiple
 
     history_lines = state.get("history", [])
     if history_lines:
         top_k_context = ["Previous turns:\n" + "\n".join(history_lines)] + top_k_context
 
+    # keep context lean
+    top_k_context = top_k_context[:4]
 
-    # Single generate call (the model should ask for missing details if needed)
-    answer = generate_fn(state["user_msg"], top_k_context, tracking_id)
-    state["answer"] = answer
+    # 2) Provide first parsed tracking id (if any)
+    tracking_id = None
+    parsed = state.get("parsed", {}) or {}
+    ids = parsed.get("ids") or []
+    if ids:
+        tracking_id = ids[0]
 
-    # Heuristic: if model asked for missing info and no tools needed anymore, we can stop
+    # 3) Generate the main answer
+    model_ans = generate_fn(state["user_msg"], top_k_context, tracking_id).strip()
+    model_ans = _ascii_safe(model_ans) 
+
+    # 4) Append structured bullets for parsed ID, ETA, and RATE
+    parts: List[str] = []
+
+    if ids:
+        parts.append(f"- Parsed tracking ID: {ids[0]} (carrier: {parsed.get('carrier') or 'unknown'}).")
+
+    if eta:
+        parts.append(
+            f"- ETA (handbook): {eta['eta_business_days']['min']}–{eta['eta_business_days']['max']} business days "
+            f"({eta['service_level']}, {eta['origin_cc']}→{eta['dest_cc']})."
+        )
+
+    rate = state.get("rate")
+    if rate:
+        parts.append(
+            f"- Estimated label price: ~${rate['price_usd_est']} USD "
+            f"({rate['service_level']}, zone: {rate['zone']}, billable {rate['billable_weight_kg']} kg)."
+        )
+        parts.append("- Note: This is a non-binding estimate; surcharges and contracts vary.")
+
+    # 5) Combine
+    if parts and model_ans:
+        answer = "\n".join(parts + [model_ans])
+    elif parts:
+        answer = "\n".join(parts)
+    else:
+        answer = model_ans
+
+    state["answer"] = _ascii_safe(answer)
     state["done"] = True
     return state
+
 
 def node_history_read(state: AgentState) -> AgentState:
     state["history"] = _memory.as_lines()

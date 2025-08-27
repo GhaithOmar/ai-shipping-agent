@@ -9,7 +9,9 @@ from transformers import (
     GenerationConfig, LogitsProcessorList, NoBadWordsLogitsProcessor
 )
 from peft import PeftModel
-
+# --- streaming generation (legacy path) ---
+from transformers import TextIteratorStreamer
+import threading
 
 # =========================
 # System policy / prompt
@@ -244,3 +246,43 @@ def infer_guarded(
         require_id=_missing_id(user_msg, provided_tracking),
         refuse_link=_wants_link(user_msg),
     )
+
+def stream_guarded(user_msg: str, top_k_context: list[str], tracking_id: str | None):
+    """
+    Yields decoded strings as the model generates them.
+    Mirrors infer_guarded() policies: system prefix + link suppression.
+    """
+    global _TOK, _MODEL
+    tok = _TOK
+    model = _MODEL
+    if tok is None or model is None:
+        raise RuntimeError("Model not loaded")
+
+    # Build prompt (same structure you use in infer_guarded)
+    sys = SYSTEM_PREFIX
+    ctx = "\n\n".join([c for c in top_k_context if c]) if top_k_context else ""
+    trk = f"\n\n[ParsedTrackingID]: {tracking_id}" if tracking_id else ""
+    prompt = f"{sys}\n\n[Context]\n{ctx}{trk}\n\n[User]\n{user_msg}\n\n[Assistant]\n"
+
+    inputs = tok(prompt, return_tensors="pt")
+    if model.device.type == "cuda":
+        for k in inputs:
+            inputs[k] = inputs[k].to(model.device)
+
+    streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
+
+    gen_kwargs = dict(
+        **inputs,
+        max_new_tokens=384,
+        do_sample=False,                 # deterministic
+        streamer=streamer,
+        repetition_penalty=1.05,
+        no_repeat_ngram_size=4,
+    )
+
+    # Background thread to run generate()
+    t = threading.Thread(target=model.generate, kwargs=gen_kwargs)
+    t.start()
+
+    for piece in streamer:
+        yield piece

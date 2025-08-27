@@ -247,6 +247,227 @@ ai-shipping-agent/
 **Run (PowerShell)**
 
 ```
+## 🧭 Day 6 — Agent polish, new tool, streaming & citations
+
+**What we shipped today**
+
+- **Agent as the smooth default**: `/chat` now uses the LangGraph path (toggle with `AGENT_ENABLE` or `?agent=0` to force legacy).
+- **New tool — `rate_quote`**: quick, explainable label price estimate with zone/service rules.
+- **Stronger `parse_tracking`**: accepts hyphenated / spaced / mixed IDs, normalizes to canonical form.
+- **Citations normalized**: both paths return `["source#chunk", ...]` (e.g., `company_a_faq.md#12`).  
+- **Streaming**:
+  - `/chat/stream` (agent): chunked SSE (client contract identical to token streams).
+  - `/chat/stream?agent=0` (legacy): **token SSE** when a model is loaded, **offline chunked** fallback otherwise.
+- **Resilience**: all endpoints degrade gracefully even if no model/GPU is available.
+- **Re‑ingest**: Qdrant payload now includes `source` (filename) and `chunk_id` (per‑file index) for traceable citations.
+
+---
+
+## 📂 Project Structure (Day 6)
+
+```text
+ai-shipping-agent/
+├── backend/
+│   ├── main.py                 # FastAPI app: /health, /chat, /chat/stream (SSE)
+│   ├── generation.py           # Guarded inference + token streaming helper
+│   ├── settings.py             # Env-driven config (AGENT_ENABLE, QDRANT_*)
+│   ├── search.py               # Legacy retriever (returns source + chunk_id)
+│   ├── agent/
+│   │   ├── graph.py            # LangGraph: understand → tool_router → respond (+ memory)
+│   │   └── memory.py           # Short-term memory (last N turns)
+│   └── tools/
+│       ├── search_kb.py        # Qdrant retriever; emits KBHit with source + chunk_id
+│       ├── parse_tracking.py   # Robust tracking parser (hyphens/spaces → normalized)
+│       ├── estimate_eta.py     # Handbook ETA rules (business days, regions)
+│       └── rate_quote.py       # NEW: handbook label price estimate
+├── rag/
+│   └── ingest.py               # Markdown → chunks → BGE-M3 → Qdrant (writes source + chunk_id)
+├── qdrant_db/                  # Embedded Qdrant store (created by ingest)
+├── tests/
+│   ├── agent/                  # Unit tests (graph/tools)
+│   └── smoke/                  # Smoke tests (API/e2e)
+├── .env.example
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## ⚙️ Environment
+
+Create `.env` (or copy from `.env.example`) and adjust if needed:
+
+```env
+# Toggle default path (true = agent by default)
+AGENT_ENABLE=true
+
+# Optional model settings (leave empty if no GPU; app will degrade gracefully)
+BASE_MODEL=
+ADAPTER_ID=
+FALLBACK_BASE=Qwen/Qwen2.5-3B-Instruct
+HUGGINGFACE_TOKEN=
+
+# Qdrant (embedded)
+QDRANT_PATH=qdrant_db
+QDRANT_COLLECTION=shipping_kb
+```
+
+> **Tip:** If you don’t have a capable GPU, keep model variables empty. The agent and legacy paths still return helpful, handbook‑based replies with citations.
+
+---
+
+## 📦 Ingest the Knowledge Base
+
+```powershell
+# PowerShell
+Remove-Item -Recurse -Force .\qdrant_db\ -ErrorAction SilentlyContinue
+python .\rag\ingest.py
+```
+
+```bash
+# Bash
+rm -rf qdrant_db
+python rag/ingest.py
+```
+
+Quick sanity check (optional):
+```powershell
+python - << 'PY'
+from backend.search import search
+print([ (h["source"], h.get("chunk_id")) for h in search("return policy", k=3) ])
+PY
+```
+
+---
+
+## ▶️ Run the API
+
+```powershell
+# PowerShell
+uvicorn backend.main:app --reload --port 8000
+```
+
+```bash
+# Bash
+uvicorn backend.main:app --reload --port 8000
+```
+
+Health:
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -Method Get
+```
+```bash
+curl -s http://127.0.0.1:8000/health
+```
+
+---
+
+## 🧪 Quick Chat Tests
+
+**Agent (default)**
+```powershell
+$body = @{ message = "Track order 12345678 with Shipping_A"; top_k = 2 } | ConvertTo-Json
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/chat" -Method Post -ContentType "application/json" -Body $body
+```
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/chat" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Track order 12345678 with Shipping_A","top_k":2}'
+```
+
+**Force legacy**
+```powershell
+$body = @{ message = "Return policy for fragile items"; top_k = 3 } | ConvertTo-Json
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/chat?agent=0" -Method Post -ContentType "application/json" -Body $body
+```
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/chat?agent=0" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Return policy for fragile items","top_k":3}'
+```
+
+You should see a JSON response like:
+```json
+{
+  "answer": "- ...",
+  "citations": ["company_a_faq.md#6", "company_b_faq.md#9"]
+}
+```
+
+---
+
+## 📡 Streaming (SSE)
+
+**Agent (chunked SSE output)**
+```powershell
+$body = @{ message = "Track order 12345678 with Shipping_A"; top_k = 2 } | ConvertTo-Json
+$r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/chat/stream" -Method Post -ContentType "application/json" -Body $body
+$r.Content
+```
+
+```bash
+curl -N -X POST "http://127.0.0.1:8000/chat/stream" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Track order 12345678 with Shipping_A","top_k":2}'
+```
+
+**Legacy (token SSE if model is loaded, otherwise offline-chunked SSE)**
+```powershell
+$body = @{ message = "Return policy for fragile items"; top_k = 3 } | ConvertTo-Json
+$r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/chat/stream?agent=0" -Method Post -ContentType "application/json" -Body $body
+$r.Content
+```
+
+```bash
+curl -N -X POST "http://127.0.0.1:8000/chat/stream?agent=0" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Return policy for fragile items","top_k":3}'
+```
+
+---
+
+## 🧰 Tests
+
+```powershell
+# Unit tests
+python -m pytest -q tests/agent
+
+# Full suite
+python -m pytest -q
+
+# (If API is running, the embedded DB may be locked on Windows; either stop Uvicorn
+# or isolate a test store)
+$env:QDRANT_PATH = "qdrant_db_test"
+Remove-Item -Recurse -Force .\qdrant_db_test -ErrorAction SilentlyContinue
+python -m pytest -q
+Remove-Item -Recurse -Force .\qdrant_db_test -ErrorAction SilentlyContinue
+```
+
+```bash
+# Bash
+python -m pytest -q
+```
+
+---
+
+## 🧯 Troubleshooting
+
+- **Empty citations on agent path** → Re‑ingest with the updated payload (must contain `source` + `chunk_id`).  
+- **“Model not loaded” in legacy streaming** → expected without GPU; endpoint streams offline chunks instead of failing.  
+- **PowerShell quoting issues** → prefer `Invoke-RestMethod` or here‑strings for JSON; avoid multi‑line `curl.exe` unless you double‑escape.  
+- **Weird characters (–, →)** → console encoding; server normalizes to ASCII in responses.
+
+---
+
+## 🔒 Limitations (Day 6)
+
+- **Data realism**: KB docs are synthetic and for demo only; citations are precise (`source#chunk`) but not from real carrier content.  
+- **Model hosting**: LoRA adapters are not deployed by default; legacy token streaming requires a local/remote model.  
+- **Evaluation**: smoke tests verify routing/guardrails; no large‑scale RAGAS or human eval yet.  
+- **Streaming in agent path**: chunked SSE today (client‑compatible); full token streaming through the graph can be added later if needed.
+
 
 ## 🔮 Limitations & Future Work
 
