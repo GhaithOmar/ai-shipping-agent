@@ -40,24 +40,45 @@ def _bf16_supported() -> bool:
         return False
 
 
+# --- keep all your imports and globals as-is ---
+
+from typing import Optional, Tuple
+import os
+import torch
+from transformers import (
+    AutoTokenizer, AutoModelForCausalLM,
+    GenerationConfig, LogitsProcessorList, NoBadWordsLogitsProcessor
+)
+from peft import PeftModel
+
+# ... keep all your other globals (_TOK, _MODEL, BAD_PATTERNS, _bf16_supported, etc.) ...
+
 def load_model_and_tokenizer(
     base_model_id: str,
-    adapter_id_or_path: str,
-    device_map: str = "auto"
+    adapter_id_or_path: Optional[str] = None,
+    device_map: str = "auto",
+    **kwargs,
 ) -> Tuple[AutoTokenizer, PeftModel]:
     """
-    Loads base model (4-bit if CUDA available) + PEFT adapter, returns (tokenizer, peft_model).
-    Reuses a process-wide singleton so repeated imports don't reload weights.
+    Loads base model (4-bit if CUDA) and attaches a PEFT LoRA adapter.
+    Accepts either adapter_id_or_path=<...> (existing) or adapter_id=<...> (new).
+    Returns (tokenizer, model). Uses singletons to avoid reloading.
     """
     global _TOK, _MODEL
     if _TOK is not None and _MODEL is not None:
         return _TOK, _MODEL
 
+    # Accept both kw names
+    adapter = kwargs.get("adapter_id") or adapter_id_or_path
+
     is_cuda = torch.cuda.is_available()
+    hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
 
     # Tokenizer
-    tok = AutoTokenizer.from_pretrained(base_model_id, use_fast=True)
-    tok.pad_token = tok.eos_token
+    tok = AutoTokenizer.from_pretrained(base_model_id, use_fast=True, token=hf_token)
+    # Ensure we have a pad token
+    if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
+        tok.pad_token = tok.eos_token
 
     # Base model
     if is_cuda:
@@ -75,25 +96,30 @@ def load_model_and_tokenizer(
             quantization_config=bnb,
             device_map=device_map,
             trust_remote_code=True,
+            token=hf_token,
         )
     else:
-        # CPU fallback (slow; for dev/test only)
+        # CPU fallback
         base = AutoModelForCausalLM.from_pretrained(
             base_model_id,
             device_map="cpu",
-            torch_dtype=torch.float32,
+            dtype=torch.float32,
             low_cpu_mem_usage=True,
             trust_remote_code=True,
+            token=hf_token,
         )
 
-    # Attach LoRA adapter (HF repo ID or local path)
-    model = PeftModel.from_pretrained(base, adapter_id_or_path).eval()
+    # Attach LoRA if provided
+    if adapter:
+        model = PeftModel.from_pretrained(base, adapter, token=hf_token).eval()
+    else:
+        model = base.eval()
 
-    # Build logits processors once
+    # Build logits processors once (keep your original behavior)
     bad_words_ids = [ids for pat in BAD_PATTERNS if (ids := tok.encode(pat, add_special_tokens=False))]
     processors = LogitsProcessorList([NoBadWordsLogitsProcessor(bad_words_ids, eos_token_id=tok.eos_token_id)])
 
-    # Deterministic decoding config (silences temp/top_p warnings)
+    # Deterministic decoding config
     gen_cfg = GenerationConfig(
         do_sample=False,
         no_repeat_ngram_size=4,
@@ -103,12 +129,13 @@ def load_model_and_tokenizer(
         max_new_tokens=140,
     )
 
-    # Stash for reuse
+    # Stash for reuse (your existing contract)
     model._gen_cfg = gen_cfg
     model._processors = processors
 
     _TOK, _MODEL = tok, model
     return tok, model
+
 
 
 # =========================

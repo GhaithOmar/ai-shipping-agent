@@ -40,3 +40,5 @@ model/adapter/
 
 # Data file
 *.csv
+
+hf_cache/

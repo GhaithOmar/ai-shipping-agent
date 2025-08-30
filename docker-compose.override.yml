@@ -1,0 +1,6 @@
+services:
+  app:
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./rag:/app/rag:ro
+      - ./warm_agent.py:/app/warm_agent.py:ro

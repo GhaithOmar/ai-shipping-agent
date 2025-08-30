@@ -468,6 +468,73 @@ python -m pytest -q
 - **Evaluation**: smoke tests verify routing/guardrails; no large‑scale RAGAS or human eval yet.  
 - **Streaming in agent path**: chunked SSE today (client‑compatible); full token streaming through the graph can be added later if needed.
 
+## 🐳 Day 7 — Dockerization & Deployment Prep
+
+Today we containerized the AI Shipping Agent for reproducibility and easier sharing.
+
+### What We Did
+- **Dockerfile**: multi-stage build
+  - Builder → pre-builds wheels from `requirements.txt`.
+  - Runtime → lightweight `python:3.11-slim` with just runtime deps.
+  - Entrypoint script (`docker/entrypoint.sh`) runs ingestion once, then launches FastAPI.
+- **docker-compose.yml**: 
+  - Mounts `qdrant_db/` volume for persistence.
+  - Exposes FastAPI on port `8000`.
+  - Loads `.env` for Hugging Face token, agent toggle, etc.
+- **Environment (`.env`)**:
+  - `AGENT_ENABLE` → agent vs legacy path.
+  - `QDRANT_PATH` → vector DB location inside container.
+  - `HOST`, `PORT` for FastAPI.
+  - Optional `BASE_MODEL`, `ADAPTER_ID`, `HF_TOKEN`.
+- **Warmup Script**:
+  - Added `warm_agent.py` for one-off model+adapter load test.
+- **Smoke Tests**:
+  - `docker compose up` launches container; `/docs` accessible.
+  - Verified retrieval and agent endpoints with PowerShell + Bash.
+  - Confirmed fallback to smaller base (`TinyLlama-1.1B`) works on CPU-only machines.
+
+### 📂 Project Structure (Day 7)
+```text
+ai-shipping-agent/
+├── backend/
+│   ├── main.py              # FastAPI app
+│   ├── generation.py        # Model loading + guarded inference
+│   ├── settings.py          # Env-based settings
+│   ├── search.py            # Legacy retriever
+│   ├── agent/
+│   │   ├── graph.py         # LangGraph agent
+│   │   └── memory.py        # Short-term memory
+│   └── tools/
+│       ├── search_kb.py     # Qdrant retriever
+│       ├── parse_tracking.py# Tracking ID parser
+│       ├── estimate_eta.py  # ETA rules
+│       └── rate_quote.py    # Rate quoting tool
+├── rag/
+│   └── ingest.py            # Markdown → embeddings → Qdrant
+├── qdrant_db/               # Local vector store (mounted in container)
+├── docker/
+│   └── entrypoint.sh        # Boot logic
+├── tests/
+│   ├── conftest.py
+│   ├── test_agent_graph.py
+│   └── smoke/…
+├── warm_agent.py            # Model warmup helper
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── .env.example
+└── README.md
+```
+##🔒 Limitations (Day 7)
+
+- **Compute limits**: On laptops without GPU, large models may OOM. Fallback base (TinyLlama-1.1B) keeps tests runnable.
+
+- **Network reliance**: First container run downloads models from Hugging Face (can be slow/unreliable).
+
+- **Adapters**: LoRA adapters not bundled into image; require token+download.
+
+- **Windows quirks**: PowerShell needs Invoke-RestMethod/Invoke-WebRequest instead of curl; CRLF vs LF warnings expected.
+
 
 ## 🔮 Limitations & Future Work
 

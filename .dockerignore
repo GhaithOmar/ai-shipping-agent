@@ -1,0 +1,59 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Python build/cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+
+# Virtual environments & environment files
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Generated data & local state
+qdrant_db/
+data/
+artifacts/
+outputs/
+logs/
+*.log
+
+# Knowledge base & large local data (mounted at runtime)
+rag/data/
+
+# Models & large binaries
+models/
+checkpoints/
+*.bin
+*.pt
+*.safetensors
+*.onnx
+*.tar
+*.zip
+
+# Notebooks & reports (optional; uncomment if you want them excluded)
+ *.ipynb
+# reports/
+# docs/
+ *.pdf
+
+# Tests (optional; exclude to slim runtime image)
+ tests/
+
+# Editor/OS cruft
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.swo
+.vscode/
+.idea/
