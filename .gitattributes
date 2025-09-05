@@ -1,0 +1,9 @@
+# Default to LF for code
+* text=auto eol=lf
+
+# Keep Windows-native line endings for PowerShell/batch scripts
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Shell scripts should stay LF
+*.sh text eol=lf
