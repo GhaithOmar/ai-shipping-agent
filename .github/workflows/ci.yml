@@ -31,8 +31,8 @@ jobs:
       - name: Install project deps
         run: |
           pip install -r requirements.txt || echo "no requirements.txt"
-          # Tools we use in CI:
-          pip install pytest ruff black mypy
+          pip install -r requirements-dev.txt || echo "no requirements-dev.txt"
+
 
       - name: Lint (ruff)
         run: ruff check .
