@@ -56,13 +56,8 @@ jobs:
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
           TOKENIZERS_PARALLELISM: "false"
-        run: |
-          # Measure only the module our smoke test uses.
-          pytest -q tests/smoke/test_api_smoke.py \
-            --cov=backend.tools.parse_tracking \
-            --cov-report=term-missing \
-            --cov-report=xml \
-            --cov-fail-under=70
+        run: pytest -q tests/smoke/test_api_smoke.py --cov=backend.tools.parse_tracking --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+
 
 
   docker-build:
