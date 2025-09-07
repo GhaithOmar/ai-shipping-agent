@@ -2,3 +2,4 @@ pytest
 ruff
 black
 mypy
+pytest-cov 
