@@ -1,9 +1,9 @@
-# VCS
+# ── VCS ────────────────────────────────────────────────────────────────────────
 .git
 .gitignore
 .gitattributes
 
-# Python build/cache
+# ── Python build/cache ─────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -12,44 +12,37 @@ __pycache__/
 *.egg-info/
 .eggs/
 
-# Virtual environments & environment files
+# ── Virtual envs & local env files ────────────────────────────────────────────
 .venv/
-venv/
 .env
 .env.*
-!.env.example
+!.env.example   # keep the example
 
-# Generated data & local state
-qdrant_db/
+# ── Notebooks & checkpoints (we don’t ship them in the runtime image) ─────────
+notebooks/
+**/*.ipynb
+.ipynb_checkpoints/
+
+# ── Data & caches (mounted by docker-compose at runtime) ──────────────────────
 data/
-artifacts/
-outputs/
-logs/
-*.log
-
-# Knowledge base & large local data (mounted at runtime)
+datasets/
+qdrant_db/
 rag/data/
-
-# Models & large binaries
-models/
-checkpoints/
-*.bin
-*.pt
-*.safetensors
-*.onnx
-*.tar
+hf_cache/
+cache/
+*.csv
+*.parquet
 *.zip
 
-# Notebooks & reports (optional; uncomment if you want them excluded)
- *.ipynb
-# reports/
-# docs/
- *.pdf
+# ── Tests (optional: exclude to slim the runtime image) ───────────────────────
+tests/
 
-# Tests (optional; exclude to slim runtime image)
- tests/
+# ── Node/misc build folders ───────────────────────────────────────────────────
+node_modules/
+dist/
+build/
 
-# Editor/OS cruft
+# ── Editor/OS cruft ──────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 *.tmp
@@ -57,3 +50,6 @@ Thumbs.db
 *.swo
 .vscode/
 .idea/
+
+# ── Docs (keep sources; skip big PDFs if you want) ────────────────────────────
+*.pdf
