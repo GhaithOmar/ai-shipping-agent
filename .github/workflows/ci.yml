@@ -43,5 +43,13 @@ jobs:
       - name: Type check (mypy) - non-blocking
         run: mypy backend/ rag/ || true
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests (smoke first)
+        env:
+          AGENT_OFFLINE: "1"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          TOKENIZERS_PARALLELISM: "false"
+        run: |
+          pytest -q tests/smoke/test_api_smoke.py
+          pytest -q
+

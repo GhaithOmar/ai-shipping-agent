@@ -14,12 +14,16 @@ from fastapi.responses import StreamingResponse
 import asyncio
 
 # RAG search (kept as-is)
-from backend.search import search as vector_search
+from backend.search import search as _vector_search
+
 
 # Guarded generation + loader
 from backend.generation import load_model_and_tokenizer, infer_guarded, stream_guarded 
 from backend.settings import settings
 from dotenv import load_dotenv
+
+AGENT_OFFLINE = os.getenv("AGENT_OFFLINE", "0") == "1"
+
 
 load_dotenv()  # loads variables from .env at repo root
 
@@ -51,6 +55,18 @@ def _sse(data: dict, event: str = "message") -> bytes:
     return (f"event: {event}\n" f"data: {json.dumps(data, ensure_ascii=False)}\n\n").encode("utf-8")
 
 
+def _offline_search(query: str, k: int = 5):
+    # Deterministic, no external deps, looks like a real hit
+    return [{
+        "text": "Offline handbook stub: packaging, tracking, delivery ETA, refunds.",
+        "source": "kb/offline_stub.md",
+        "chunk_id": 1,
+        "score": 0.01,
+    }][:k]
+
+# choose the search func based on the flag
+vector_search = _offline_search if AGENT_OFFLINE else _vector_search
+
 # ========= Load model once =========
 tok_backend = None
 model_backend = None
@@ -79,7 +95,13 @@ def _boot():
                 log.exception(f"Fallback load failed: {ee}")
                 raise
 
-_boot()
+if not AGENT_OFFLINE:
+    _boot()
+else:
+    log.info("AGENT_OFFLINE=1 — skipping model load; using offline generator.")
+    tok_backend = None
+    model_backend = None
+
 # ========= Agent (LangGraph) bootstrap =========
 agent_app = None
 
@@ -113,7 +135,8 @@ def _build_agent():
             provided_tracking=provided_tracking,
         )
 
-    agent_app = build_graph(generate_fn)
+    agent_app = build_graph(offline_generate if AGENT_OFFLINE else generate_fn)
+
 
 def _offline_legacy_reply(user_msg: str, top_k: int = 2):
     # lightweight KB pull

@@ -17,7 +17,7 @@ services:
       - ./rag/data:/app/rag/data:ro
       - ./hf_cache:/home/appuser/.cache/huggingface   # <-- new: persist cache
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5

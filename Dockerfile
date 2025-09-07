@@ -66,8 +66,9 @@ USER appuser
 EXPOSE 8000
 
 # Healthcheck: hit the root or a lightweight ping endpoint if you add one
-HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
-  CMD curl -fsS http://127.0.0.1:8000/ || exit 1
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+
 
 # Use tini as init for proper signal handling
 ENTRYPOINT ["/usr/bin/tini", "--"]
