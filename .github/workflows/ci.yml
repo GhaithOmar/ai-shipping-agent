@@ -41,17 +41,23 @@ jobs:
       - name: Format check (black)
         run: black --check .
 
-      - name: Type check (mypy) - non-blocking
-        run: mypy backend/ rag/ || true
+      - name: Type check (mypy)
+        run: |
+          # Gate strictly on stable modules:
+          mypy backend/tools backend/agent --ignore-missing-imports
+          # Keep the wide pass non-blocking while types evolve:
+          mypy backend rag || true
 
-      - name: Run tests (smoke first)
+
+      - name: Run tests (smoke only for now) with coverage
         env:
           AGENT_OFFLINE: "1"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
           TOKENIZERS_PARALLELISM: "false"
         run: |
-          pytest -q tests/smoke/test_api_smoke.py
+          pytest -q tests/smoke/test_api_smoke.py --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=40
+
 
   docker-build:
     name: Docker Build (no push)
@@ -141,3 +147,25 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+
+  image-scan:
+    name: Image Scan (Trivy)
+    needs: [docker-build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image for scan (load locally)
+        run: docker build -t local/ai-shipping-agent:scan -f Dockerfile .
+
+      - name: Scan with Trivy (fail on CRITICAL only)
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: local/ai-shipping-agent:scan
+          format: 'table'
+          severity: 'CRITICAL'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          exit-code: '1'

@@ -535,6 +535,140 @@ ai-shipping-agent/
 
 - **Windows quirks**: PowerShell needs Invoke-RestMethod/Invoke-WebRequest instead of curl; CRLF vs LF warnings expected.
 
+## 🚀 Day 8 — CI, Releases & GHCR
+
+[![CI](https://github.com/GhaithOmar/ai-shipping-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GhaithOmar/ai-shipping-agent/actions/workflows/ci.yml)
+
+Today we made the project feel “production-ready”: automated lint/tests, deterministic Docker builds in CI, and one-command versioned releases.
+
+### What We Did
+- **CI Pipeline (GitHub Actions)**
+  - Lint & format: `ruff` + `black` (fail fast on style/correctness).
+  - **Offline** smoke tests (no HF downloads) to keep CI fast/reliable.
+  - **Docker Build (no push)** job to ensure the image builds on clean runners.
+  - **Publish on tag** to **GHCR** (`ghcr.io/ghaithomar/ai-shipping-agent:vX.Y.Z` + `:latest`) and auto **GitHub Release** notes.
+- **Safer Docker build**
+  - `.dockerignore` tuned to exclude caches, notebooks, and local DBs.
+  - `.env.example` generated in-image (no secrets; predictable boot).
+  - Health check hits `/health` so containers report **healthy**.
+- **Docs**
+  - Added run commands (Docker & source), release steps, and troubleshooting.
+
+---
+
+### How to Run (Docker)
+```bash
+# Pull the latest published image
+docker pull ghcr.io/ghaithomar/ai-shipping-agent:latest
+
+# Run the API at http://127.0.0.1:8000
+docker run --rm -p 8000:8000 ghcr.io/ghaithomar/ai-shipping-agent:latest
+```
+
+**Windows (PowerShell) quick checks**
+```powershell
+# health
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -Method Get
+
+# chat (non-streaming)
+$body = @{ message = "Track order 12345678 with Shipping_A"; top_k = 2 } | ConvertTo-Json
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/chat" -Method Post -ContentType "application/json" -Body $body
+
+# streaming (SSE text payload)
+$r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/chat/stream" -Method Post -ContentType "application/json" -Body $body
+$r.Content
+```
+
+**Bash**
+```bash
+# agent (default)
+curl -s -X POST "http://127.0.0.1:8000/chat"   -H "Content-Type: application/json"   -d '{"message":"Track order 12345678 with Shipping_A","top_k":2}'
+
+# legacy (force no agent)
+curl -s -X POST "http://127.0.0.1:8000/chat?agent=0"   -H "Content-Type: application/json"   -d '{"message":"Return policy for fragile items","top_k":3}'
+
+# streaming (agent)
+curl -N -X POST "http://127.0.0.1:8000/chat/stream"   -H "Content-Type: application/json"   -d '{"message":"Track order 12345678 with Shipping_A","top_k":2}'
+```
+
+---
+
+### Run from Source (dev)
+```bash
+# 1) Create your local env file
+cp .env.example .env   # (Windows: copy .env.example .env)
+
+# 2) (Optional) offline mode to avoid HF downloads
+echo "AGENT_OFFLINE=1" >> .env
+
+# 3) Create venv & install deps
+python -m venv .venv && source .venv/bin/activate   # (Windows: .\.venv\Scripts\Activate.ps1)
+pip install -U pip && pip install -r requirements.txt
+
+# 4) Start API
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+---
+
+### Cut a Release (publishes Docker image to GHCR)
+This repo auto-publishes `ghcr.io/ghaithomar/ai-shipping-agent` when you push a tag that starts with `v`.
+
+```bash
+git pull --rebase origin main
+git tag -a v0.8.3 -m "Day 8: CI + GHCR publish"
+git push origin v0.8.3
+```
+
+- After the first publish, set **Packages → ai-shipping-agent → Settings → Visibility: Public**.
+- Pull & run:
+  ```bash
+  docker pull ghcr.io/ghaithomar/ai-shipping-agent:v0.8.3
+  docker run --rm -p 8000:8000 ghcr.io/ghaithomar/ai-shipping-agent:v0.8.3
+  ```
+
+---
+
+### 📂 Project Structure (Day 8)
+```text
+ai-shipping-agent/
+├── backend/
+│   ├── main.py              # FastAPI app (/health, /chat, /chat/stream)
+│   ├── generation.py        # Model loading + guarded inference
+│   ├── settings.py          # Env-based settings
+│   ├── search.py            # Legacy retriever
+│   ├── agent/
+│   │   ├── graph.py         # LangGraph agent
+│   │   └── memory.py        # Short-term memory
+│   └── tools/
+│       ├── search_kb.py     # Qdrant retriever
+│       ├── parse_tracking.py# Tracking ID parser
+│       ├── estimate_eta.py  # ETA rules
+│       └── rate_quote.py    # Rate quoting tool
+├── rag/
+│   └── ingest.py            # Markdown → embeddings → Qdrant
+├── qdrant_db/               # Local vector store (generated; not in image)
+├── docker/
+│   └── entrypoint.sh        # Boot logic (ingest once → uvicorn)
+├── tests/
+│   └── smoke/test_api_smoke.py  # Offline, self-contained API smoke
+├── .github/workflows/ci.yml # Lint/tests → docker build → publish on tag → release
+├── .dockerignore            # Slimmer, safer build context
+├── .env.example             # Safe defaults (generated in image too)
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+└── README.md
+```
+
+---
+
+### 🔒 Limitations (Day 8)
+- **Offline smoke** keeps CI fast but doesn’t measure model quality; full eval (e.g., RAGAS) is out of scope today.
+- **No live tracking**: answers are handbook/RAG-based; agent refuses to share direct links.
+- **Image excludes local data** (Qdrant DB, caches, notebooks) by design; they’re mounted at runtime.
+
+
 
 ## 🔮 Limitations & Future Work
 

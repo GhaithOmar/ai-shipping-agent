@@ -1,0 +1,16 @@
+[run]
+branch = True
+source =
+    backend
+    rag
+omit =
+    */tests/*
+    */__init__.py
+    */.venv/*
+    */notebooks/*
+    */qdrant_db/*
+    */scripts/*
+
+[report]
+skip_covered = True
+show_missing = True
