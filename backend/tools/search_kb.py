@@ -1,10 +1,11 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional
+
 import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+from qdrant_client.http.models import FieldCondition, Filter, MatchValue
 from sentence_transformers import SentenceTransformer
 
 # If you later add qdrant_path to Settings, you can import it there.
@@ -17,11 +18,13 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 _EMBEDDER = None
 _QDRANT: Optional[QdrantClient] = None
 
+
 def _get_embedder() -> SentenceTransformer:
     global _EMBEDDER
     if _EMBEDDER is None:
         _EMBEDDER = SentenceTransformer("BAAI/bge-m3")
     return _EMBEDDER
+
 
 def _get_qdrant() -> Optional[QdrantClient]:
     """
@@ -46,6 +49,7 @@ def _get_qdrant() -> Optional[QdrantClient]:
         _QDRANT = None
         return None
 
+
 @dataclass
 class KBHit:
     text: str
@@ -53,6 +57,7 @@ class KBHit:
     source: str | None = None
     chunk_id: str | None = None
     meta: Dict[str, Any] | None = None
+
 
 def search_kb(query: str, k: int = 4, carrier: str | None = None) -> List[KBHit]:
     """
@@ -68,7 +73,9 @@ def search_kb(query: str, k: int = 4, carrier: str | None = None) -> List[KBHit]
 
     qfilter = None
     if carrier:
-        qfilter = Filter(must=[FieldCondition(key="carrier", match=MatchValue(value=carrier))])
+        qfilter = Filter(
+            must=[FieldCondition(key="carrier", match=MatchValue(value=carrier))]
+        )
 
     try:
         # Use query_points (newer API)
@@ -109,7 +116,6 @@ def search_kb(query: str, k: int = 4, carrier: str | None = None) -> List[KBHit]
     return hits
 
 
-
 def format_citations(hits: List[KBHit]) -> List[Dict[str, Any]]:
     """Dict citations for internal agent state: [{'ref': 'source#chunk', 'score': 0.87}, ...]."""
     out: List[Dict[str, Any]] = []
@@ -120,6 +126,7 @@ def format_citations(hits: List[KBHit]) -> List[Dict[str, Any]]:
         out.append({"ref": label, "score": float(h.score)})
     return out
 
+
 def format_citation_strings(hits: List[KBHit]) -> List[str]:
     """String citations for API responses: ['source#chunk', ...]."""
     out: List[str] = []
@@ -129,4 +136,3 @@ def format_citation_strings(hits: List[KBHit]) -> List[str]:
             label = f"{label}#{h.chunk_id}"
         out.append(label)
     return out
-

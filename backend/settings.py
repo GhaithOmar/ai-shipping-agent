@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     hf_token: str | None = None
     qdrant_host: str = "127.0.0.1"
@@ -15,5 +16,6 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
 
 settings = Settings()

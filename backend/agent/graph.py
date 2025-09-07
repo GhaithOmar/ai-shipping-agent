@@ -1,35 +1,45 @@
 from __future__ import annotations
-from typing import List, Dict, Any, Optional, Callable, Literal
-from typing_extensions import TypedDict
+
 from dataclasses import asdict
+from typing import Any, Callable, Dict, List, Optional
+
+from langgraph.graph import END, START, StateGraph
+from typing_extensions import TypedDict
+
+# Memory
+from backend.agent.memory import ShortMemory
 from backend.search import search as vector_search  # legacy fallback search
-
-
-from langgraph.graph import StateGraph, START, END
-
-# Tools
-from backend.tools.search_kb import search_kb, format_citations, KBHit
-from backend.tools.parse_tracking import parse_tracking
 from backend.tools.estimate_eta import estimate_eta
+from backend.tools.parse_tracking import parse_tracking
 from backend.tools.rate_quote import rate_quote
 
-# Memory 
-from backend.agent.memory import ShortMemory
+# Tools
+from backend.tools.search_kb import KBHit, format_citations, search_kb
+
 _memory = ShortMemory(max_turns=6)
+
 
 # Helper function
 def _ascii_safe(s: str) -> str:
     if not s:
         return s
     table = {
-        "–": "-", "—": "-", "−": "-",
-        "→": "->", "←": "<-",
-        "’": "'", "‘": "'", "“": '"', "”": '"',
-        "…": "...", "\u00A0": " ",
+        "–": "-",
+        "—": "-",
+        "−": "-",
+        "→": "->",
+        "←": "<-",
+        "’": "'",
+        "‘": "'",
+        "“": '"',
+        "”": '"',
+        "…": "...",
+        "\u00a0": " ",
     }
     for k, v in table.items():
         s = s.replace(k, v)
     return s
+
 
 # -------- Agent State --------
 class AgentState(TypedDict, total=False):
@@ -37,19 +47,21 @@ class AgentState(TypedDict, total=False):
     # tool outputs
     kb_hits: List[Dict[str, Any]]
     citations: List[Dict[str, str]]
-    parsed: Dict[str, Any]            # parse_tracking result
-    eta: Dict[str, Any]               # estimate_eta result
+    parsed: Dict[str, Any]  # parse_tracking result
+    eta: Dict[str, Any]  # estimate_eta result
     # control
-    needed: List[str]                 # list of needs: ["tracking_id", "retrieval", "eta"]
-    done: bool                        # terminal flag
+    needed: List[str]  # list of needs: ["tracking_id", "retrieval", "eta"]
+    done: bool  # terminal flag
     # final
     answer: str
     history: List[str]
-    rate: Dict[str, Any]              # rate_quote result
+    rate: Dict[str, Any]  # rate_quote result
+
 
 # Type of the generation function we’ll receive from the backend
 GenerateFn = Callable[[str, List[str], Optional[str]], str]
 # (user_msg, top_k_context, provided_tracking) -> answer_text
+
 
 # -------- Nodes --------
 def node_understand(state: AgentState) -> AgentState:
@@ -63,14 +75,27 @@ def node_understand(state: AgentState) -> AgentState:
     # If user asked about tracking/scan/quote/where is my package: want retrieval too
     lower = msg.lower()
     intents = {
-        "needs_eta": any(k in lower for k in ["eta", "how long", "when arrive", "delivery time"]),
-        "needs_tracking": any(k in lower for k in ["track", "tracking", "scan", "status"]),
-        "needs_quote": any(k in lower for k in ["quote", "rate", "price", "how much", "shipping cost", "label price"])  # NEW
+        "needs_eta": any(
+            k in lower for k in ["eta", "how long", "when arrive", "delivery time"]
+        ),
+        "needs_tracking": any(
+            k in lower for k in ["track", "tracking", "scan", "status"]
+        ),
+        "needs_quote": any(
+            k in lower
+            for k in [
+                "quote",
+                "rate",
+                "price",
+                "how much",
+                "shipping cost",
+                "label price",
+            ]
+        ),  # NEW
     }
 
     if intents["needs_quote"]:
         needs.append("quote")
-
 
     if intents["needs_tracking"]:
         needs.append("retrieval")
@@ -85,6 +110,7 @@ def node_understand(state: AgentState) -> AgentState:
     state["needed"] = needs
     state["done"] = False
     return state
+
 
 def node_tool_router(state: AgentState) -> AgentState:
     """Run the tools we decided we need."""
@@ -105,20 +131,29 @@ def node_tool_router(state: AgentState) -> AgentState:
                 txt = h.get("text") or h.get("chunk") or ""
                 src = h.get("source") or ""
                 chk = str(h.get("chunk_id") or h.get("id") or "")
-                kb_hits.append(KBHit(text=txt, score=float(h.get("score", 0.0) or 0.0),
-                                     source=src, chunk_id=chk, meta=h))
+                kb_hits.append(
+                    KBHit(
+                        text=txt,
+                        score=float(h.get("score", 0.0) or 0.0),
+                        source=src,
+                        chunk_id=chk,
+                        meta=h,
+                    )
+                )
 
         state["kb_hits"] = [asdict(h) for h in kb_hits]
         state["citations"] = format_citations(kb_hits)
-
 
     # 2) ETA estimate (try only if user asked)
     if "eta" in needs:
         # naive detection of country codes in message (e.g., "JO to AE express")
         import re
+
         cc = re.findall(r"\b([A-Z]{2})\b", msg.upper())
-        origin_cc = cc[0] if len(cc) >= 1 else "JO"       # default to JO (your locale) if missing
-        dest_cc   = cc[1] if len(cc) >= 2 else origin_cc
+        origin_cc = (
+            cc[0] if len(cc) >= 1 else "JO"
+        )  # default to JO (your locale) if missing
+        dest_cc = cc[1] if len(cc) >= 2 else origin_cc
         # detect service keyword
         lvl = "standard"
         for key in ["express", "standard", "economy"]:
@@ -134,17 +169,15 @@ def node_tool_router(state: AgentState) -> AgentState:
             origin_cc=state.get("origin_cc", "JO"),
             dest_cc=state.get("dest_cc", "AE"),
             weight_kg=state.get("weight_kg", 1.0),
-            dims_cm=state.get("dims_cm"),   # (L,W,H) if detected, else None
+            dims_cm=state.get("dims_cm"),  # (L,W,H) if detected, else None
             service_level="standard",
         )
         state["rate"] = rate
 
     state["citations"] = format_citations(kb_hits)  # list[dict] with 'ref'
 
-
     return state
 
-from typing import List  # ensure this import exists at top of file
 
 def node_respond(state: AgentState, generate_fn: GenerateFn) -> AgentState:
     """Call the guarded generator, then append ETA/Rate/Parsed-ID bullets."""
@@ -180,13 +213,15 @@ def node_respond(state: AgentState, generate_fn: GenerateFn) -> AgentState:
 
     # 3) Generate the main answer
     model_ans = generate_fn(state["user_msg"], top_k_context, tracking_id).strip()
-    model_ans = _ascii_safe(model_ans) 
+    model_ans = _ascii_safe(model_ans)
 
     # 4) Append structured bullets for parsed ID, ETA, and RATE
     parts: List[str] = []
 
     if ids:
-        parts.append(f"- Parsed tracking ID: {ids[0]} (carrier: {parsed.get('carrier') or 'unknown'}).")
+        parts.append(
+            f"- Parsed tracking ID: {ids[0]} (carrier: {parsed.get('carrier') or 'unknown'})."
+        )
 
     if eta:
         parts.append(
@@ -200,7 +235,9 @@ def node_respond(state: AgentState, generate_fn: GenerateFn) -> AgentState:
             f"- Estimated label price: ~${rate['price_usd_est']} USD "
             f"({rate['service_level']}, zone: {rate['zone']}, billable {rate['billable_weight_kg']} kg)."
         )
-        parts.append("- Note: This is a non-binding estimate; surcharges and contracts vary.")
+        parts.append(
+            "- Note: This is a non-binding estimate; surcharges and contracts vary."
+        )
 
     # 5) Combine
     if parts and model_ans:
@@ -219,11 +256,14 @@ def node_history_read(state: AgentState) -> AgentState:
     state["history"] = _memory.as_lines()
     return state
 
+
 def node_history_write(state: AgentState) -> AgentState:
     # persist last user message and model answer
-    _memory.add("user", state.get("user_msg","")[:500])
+    _memory.add("user", state.get("user_msg", "")[:500])
     _memory.add("assistant", (state.get("answer") or "")[:500])
     return state
+
+
 # -------- Builder --------
 def build_graph(generate_fn: GenerateFn):
     """
@@ -251,8 +291,8 @@ def build_graph(generate_fn: GenerateFn):
     g.add_edge("respond", "history_write")
     g.add_edge("history_write", END)
 
-
     return g.compile()
+
 
 # -------- Runner convenience --------
 def run_agent(app, message: str) -> Dict[str, Any]:

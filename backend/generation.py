@@ -1,17 +1,21 @@
 # backend/generation.py
 import os
 import re
+import threading
 from typing import List, Optional, Tuple
 
 import torch
-from transformers import (
-    AutoTokenizer, AutoModelForCausalLM,
-    GenerationConfig, LogitsProcessorList, NoBadWordsLogitsProcessor
-)
 from peft import PeftModel
+
 # --- streaming generation (legacy path) ---
-from transformers import TextIteratorStreamer
-import threading
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GenerationConfig,
+    LogitsProcessorList,
+    NoBadWordsLogitsProcessor,
+    TextIteratorStreamer,
+)
 
 # =========================
 # System policy / prompt
@@ -24,8 +28,23 @@ SYSTEM_PREFIX = (
 
 # Token-level blocks for links/handles/marketing phrasing
 BAD_PATTERNS = [
-    "http://", "https://", "www.", ".com", ".net", ".org", ".io", ".co", ".ly",
-    "@", " DM ", "direct message", "^", " #", " link ", " url ", " website "
+    "http://",
+    "https://",
+    "www.",
+    ".com",
+    ".net",
+    ".org",
+    ".io",
+    ".co",
+    ".ly",
+    "@",
+    " DM ",
+    "direct message",
+    "^",
+    " #",
+    " link ",
+    " url ",
+    " website ",
 ]
 
 # Singleton cache
@@ -42,16 +61,9 @@ def _bf16_supported() -> bool:
 
 # --- keep all your imports and globals as-is ---
 
-from typing import Optional, Tuple
-import os
-import torch
-from transformers import (
-    AutoTokenizer, AutoModelForCausalLM,
-    GenerationConfig, LogitsProcessorList, NoBadWordsLogitsProcessor
-)
-from peft import PeftModel
 
 # ... keep all your other globals (_TOK, _MODEL, BAD_PATTERNS, _bf16_supported, etc.) ...
+
 
 def load_model_and_tokenizer(
     base_model_id: str,
@@ -77,13 +89,17 @@ def load_model_and_tokenizer(
     # Tokenizer
     tok = AutoTokenizer.from_pretrained(base_model_id, use_fast=True, token=hf_token)
     # Ensure we have a pad token
-    if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
+    if (
+        getattr(tok, "pad_token", None) is None
+        and getattr(tok, "eos_token", None) is not None
+    ):
         tok.pad_token = tok.eos_token
 
     # Base model
     if is_cuda:
         # 4-bit quant for GPU
         from transformers import BitsAndBytesConfig
+
         compute_dtype = torch.bfloat16 if _bf16_supported() else torch.float16
         bnb = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -116,8 +132,14 @@ def load_model_and_tokenizer(
         model = base.eval()
 
     # Build logits processors once (keep your original behavior)
-    bad_words_ids = [ids for pat in BAD_PATTERNS if (ids := tok.encode(pat, add_special_tokens=False))]
-    processors = LogitsProcessorList([NoBadWordsLogitsProcessor(bad_words_ids, eos_token_id=tok.eos_token_id)])
+    bad_words_ids = [
+        ids
+        for pat in BAD_PATTERNS
+        if (ids := tok.encode(pat, add_special_tokens=False))
+    ]
+    processors = LogitsProcessorList(
+        [NoBadWordsLogitsProcessor(bad_words_ids, eos_token_id=tok.eos_token_id)]
+    )
 
     # Deterministic decoding config
     gen_cfg = GenerationConfig(
@@ -137,30 +159,39 @@ def load_model_and_tokenizer(
     return tok, model
 
 
-
 # =========================
 # Intent detection
 # =========================
 TRACK_INTENT = re.compile(
     r"\b(track(ing)?|status|where\s+(is|’s|'s)|locate|find|scan(s)?|last\s+(two|2)\s+scans?|update|trace|follow\s*up)\b",
-    re.I
+    re.I,
 )
 LINK_INTENT = re.compile(r"\b(link|url|website|web\s*site)\b", re.I)
 DELIVERY_ISSUE_INTENT = re.compile(
     r"\b(delivered|not\s+received|missing|lost|stolen|proof\s+of\s+delivery|pod|misdeliver(ed)?|left\s+at)\b",
-    re.I
+    re.I,
 )
-ADDRESS_CHANGE_INTENT = re.compile(r"\b(address|postcode|zip|postal\s+code|suite|apt|apartment|unit)\b", re.I)
-CUSTOMS_INTENT = re.compile(r"\b(customs|duty|tariff|hs\s*code|clearance|invoice|id|proof\s+of\s+payment|declaration)\b", re.I)
+ADDRESS_CHANGE_INTENT = re.compile(
+    r"\b(address|postcode|zip|postal\s+code|suite|apt|apartment|unit)\b", re.I
+)
+CUSTOMS_INTENT = re.compile(
+    r"\b(customs|duty|tariff|hs\s*code|clearance|invoice|id|proof\s+of\s+payment|declaration)\b",
+    re.I,
+)
 
 
 def infer_intent(user_text: str) -> str:
     t = user_text.lower()
-    if LINK_INTENT.search(t): return "link_request"
-    if TRACK_INTENT.search(t): return "tracking"
-    if DELIVERY_ISSUE_INTENT.search(t): return "delivery_issue"
-    if ADDRESS_CHANGE_INTENT.search(t): return "address"
-    if CUSTOMS_INTENT.search(t): return "customs"
+    if LINK_INTENT.search(t):
+        return "link_request"
+    if TRACK_INTENT.search(t):
+        return "tracking"
+    if DELIVERY_ISSUE_INTENT.search(t):
+        return "delivery_issue"
+    if ADDRESS_CHANGE_INTENT.search(t):
+        return "address"
+    if CUSTOMS_INTENT.search(t):
+        return "customs"
     return "general"
 
 
@@ -169,7 +200,10 @@ def has_any_id(text: str, provided_tracking: Optional[str]) -> bool:
         return True
     t = text.strip()
     # AWB/Waybill/Tracking/Order patterns (alnum with 8+ chars)
-    if re.search(r"(?i)\b(awb|waybill|tracking|order)\s*(no\.?|number|id)?\s*[:#-]?\s*[A-Z0-9\-]{8,}", t):
+    if re.search(
+        r"(?i)\b(awb|waybill|tracking|order)\s*(no\.?|number|id)?\s*[:#-]?\s*[A-Z0-9\-]{8,}",
+        t,
+    ):
         return True
     # bare long numbers (8+)
     if re.search(r"\b\d{8,}\b", t):
@@ -202,7 +236,9 @@ def _postprocess(text: str, require_id: bool, refuse_link: bool) -> str:
     text = re.sub(r"(?i)cutting knowledge date:.*|today date:.*", "", text)
     text = re.sub(r"https?://\S+|www\.\S+|\S+\.(com|net|org|io|co|ly)\b", "", text)
     text = re.sub(r"(?i)@\w+|dm|direct message", "", text)
-    text = re.sub(r"(?i)(thanks for reaching out|we'?re here to help|view it here).*", "", text)
+    text = re.sub(
+        r"(?i)(thanks for reaching out|we'?re here to help|view it here).*", "", text
+    )
     text = re.sub(r"[\*\~_]{1,3}", "", text)
 
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -224,14 +260,27 @@ def _postprocess(text: str, require_id: bool, refuse_link: bool) -> str:
         bullets = [f"- {s.strip()}" for s in sents if s.strip()][:4]
 
     # Insert “ask for ID”
-    if require_id and not any(re.search(r"(tracking|waybill|order)\s*(number|id)", b.lower()) for b in bullets):
-        bullets.insert(0, "- Please share your tracking/waybill number and the carrier (e.g., Shipping_A).")
+    if require_id and not any(
+        re.search(r"(tracking|waybill|order)\s*(number|id)", b.lower()) for b in bullets
+    ):
+        bullets.insert(
+            0,
+            "- Please share your tracking/waybill number and the carrier (e.g., Shipping_A).",
+        )
 
     # Insert explicit link refusal
-    if refuse_link and not any(re.search(r"can('?|no)t share links|cannot share links", b, re.I) for b in bullets):
-        bullets.insert(0, "- I can’t share tracking links. Use the carrier’s official site/app with your waybill number.")
+    if refuse_link and not any(
+        re.search(r"can('?|no)t share links|cannot share links", b, re.I)
+        for b in bullets
+    ):
+        bullets.insert(
+            0,
+            "- I can’t share tracking links. Use the carrier’s official site/app with your waybill number.",
+        )
 
-    bullets = [b if b.startswith("- ") else "- " + b.lstrip("-* ").strip() for b in bullets[:4]]
+    bullets = [
+        b if b.startswith("- ") else "- " + b.lstrip("-* ").strip() for b in bullets[:4]
+    ]
     return "\n".join(bullets)
 
 
@@ -243,7 +292,7 @@ def infer_guarded(
     top_k_context: Optional[List[str]],
     tok: AutoTokenizer,
     model: PeftModel,
-    provided_tracking: Optional[str] = None
+    provided_tracking: Optional[str] = None,
 ) -> str:
     messages = [{"role": "system", "content": SYSTEM_PREFIX}]
     if top_k_context:
@@ -252,7 +301,9 @@ def infer_guarded(
     messages.append({"role": "user", "content": user_msg})
 
     # Build prompt as STRING, then tokenize to dict
-    prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prompt = tok.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
     inputs = tok(prompt, return_tensors="pt")
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
@@ -273,6 +324,7 @@ def infer_guarded(
         require_id=_missing_id(user_msg, provided_tracking),
         refuse_link=_wants_link(user_msg),
     )
+
 
 def stream_guarded(user_msg: str, top_k_context: list[str], tracking_id: str | None):
     """
@@ -301,7 +353,7 @@ def stream_guarded(user_msg: str, top_k_context: list[str], tracking_id: str | N
     gen_kwargs = dict(
         **inputs,
         max_new_tokens=384,
-        do_sample=False,                 # deterministic
+        do_sample=False,  # deterministic
         streamer=streamer,
         repetition_penalty=1.05,
         no_repeat_ngram_size=4,

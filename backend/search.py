@@ -3,7 +3,8 @@ Search helper: open the same embedded Qdrant DB, encode the query, and return to
 We keep the embedder and client as module-level singletons so they don't reload on every request.
 """
 
-from typing import List, Dict
+from typing import Dict, List
+
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 
@@ -28,12 +29,12 @@ def search(query: str, k: int = 5) -> List[Dict]:
         payload = h.payload or {}
         # inside the loop where you build each hit dict
         results.append(
-        {
-            "text": payload.get("text", ""),
-            "source": payload.get("source", "") or payload.get("file", ""),
-            "chunk_id": str(getattr(h, "id", "") or payload.get("chunk_id") or ""),
-            "score": float(h.score),
-        }
-    )
+            {
+                "text": payload.get("text", ""),
+                "source": payload.get("source", "") or payload.get("file", ""),
+                "chunk_id": str(getattr(h, "id", "") or payload.get("chunk_id") or ""),
+                "score": float(h.score),
+            }
+        )
 
     return results

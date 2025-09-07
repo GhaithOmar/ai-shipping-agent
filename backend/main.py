@@ -1,32 +1,29 @@
 # backend/main.py
-from typing import List, Optional
-import os
+import asyncio
+import json
 import logging
-import json, time
+import os
+import time
+from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+from fastapi import FastAPI, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from fastapi import Query
 from backend.agent.graph import build_graph, run_agent
 
-from fastapi.responses import StreamingResponse
-import asyncio
+# Guarded generation + loader
+from backend.generation import infer_guarded, load_model_and_tokenizer, stream_guarded
 
 # RAG search (kept as-is)
 from backend.search import search as _vector_search
-
-
-# Guarded generation + loader
-from backend.generation import load_model_and_tokenizer, infer_guarded, stream_guarded 
 from backend.settings import settings
-from dotenv import load_dotenv
 
 AGENT_OFFLINE = os.getenv("AGENT_OFFLINE", "0") == "1"
 
 
 load_dotenv()  # loads variables from .env at repo root
-
 
 
 log = logging.getLogger("uvicorn")
@@ -37,32 +34,53 @@ logging.basicConfig(level=logging.INFO)
 #  1) set ADAPTER_ID="" to run a plain open model, or
 #  2) set BASE_MODEL to an open base you have (e.g., "Qwen/Qwen2.5-3B-Instruct")
 BASE_MODEL = os.getenv("BASE_MODEL", "meta-llama/Meta-Llama-3.1-8B-Instruct")
-ADAPTER_ID = os.getenv("ADAPTER_ID", "GhaithOmar/ai-shipping-agent-llama3.1-8b-lora-day4")
-HF_TOKEN   = os.getenv("HUGGINGFACE_TOKEN", None)
+ADAPTER_ID = os.getenv(
+    "ADAPTER_ID", "GhaithOmar/ai-shipping-agent-llama3.1-8b-lora-day4"
+)
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN", None)
 
 # Optional non-gated fallback if loading the above fails and ADAPTER_ID is empty.
 FALLBACK_BASE = os.getenv("FALLBACK_BASE", "Qwen/Qwen2.5-3B-Instruct")
 
+
 def _ascii_safe(s: str) -> str:
     if not s:
         return s
-    table = {"–":"-","—":"-","−":"-","→":"->","←":"<-","’":"'","‘":"'","“":'"',"”":'"',"…":"...","\u00A0":" "}
-    for k,v in table.items():
-        s = s.replace(k,v)
+    table = {
+        "–": "-",
+        "—": "-",
+        "−": "-",
+        "→": "->",
+        "←": "<-",
+        "’": "'",
+        "‘": "'",
+        "“": '"',
+        "”": '"',
+        "…": "...",
+        "\u00a0": " ",
+    }
+    for k, v in table.items():
+        s = s.replace(k, v)
     return s
 
+
 def _sse(data: dict, event: str = "message") -> bytes:
-    return (f"event: {event}\n" f"data: {json.dumps(data, ensure_ascii=False)}\n\n").encode("utf-8")
+    return (
+        f"event: {event}\n" f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    ).encode("utf-8")
 
 
 def _offline_search(query: str, k: int = 5):
     # Deterministic, no external deps, looks like a real hit
-    return [{
-        "text": "Offline handbook stub: packaging, tracking, delivery ETA, refunds.",
-        "source": "kb/offline_stub.md",
-        "chunk_id": 1,
-        "score": 0.01,
-    }][:k]
+    return [
+        {
+            "text": "Offline handbook stub: packaging, tracking, delivery ETA, refunds.",
+            "source": "kb/offline_stub.md",
+            "chunk_id": 1,
+            "score": 0.01,
+        }
+    ][:k]
+
 
 # choose the search func based on the flag
 vector_search = _offline_search if AGENT_OFFLINE else _vector_search
@@ -70,6 +88,7 @@ vector_search = _offline_search if AGENT_OFFLINE else _vector_search
 # ========= Load model once =========
 tok_backend = None
 model_backend = None
+
 
 def _boot():
     global tok_backend, model_backend
@@ -95,6 +114,7 @@ def _boot():
                 log.exception(f"Fallback load failed: {ee}")
                 raise
 
+
 if not AGENT_OFFLINE:
     _boot()
 else:
@@ -105,19 +125,23 @@ else:
 # ========= Agent (LangGraph) bootstrap =========
 agent_app = None
 
+
 def _build_agent():
     global agent_app
 
     def offline_generate(user_msg, top_k_context, provided_tracking=None):
         # safe, model-free reply
         from backend.tools.parse_tracking import parse_tracking
+
         parsed = parse_tracking(user_msg)
         ids = parsed.get("ids") or ([provided_tracking] if provided_tracking else [])
         bullets = []
         if not ids:
             bullets.append("Please share a valid tracking ID (and carrier if known).")
         else:
-            bullets.append(f"Parsed tracking ID: {ids[0]} (carrier: {parsed.get('carrier') or 'unknown'}).")
+            bullets.append(
+                f"Parsed tracking ID: {ids[0]} (carrier: {parsed.get('carrier') or 'unknown'})."
+            )
         if top_k_context:
             bullets.append(f"Using {len(top_k_context)} retrieved context chunk(s).")
         bullets.append("No live tracking is used; info is handbook-based.")
@@ -161,7 +185,9 @@ def _offline_legacy_reply(user_msg: str, top_k: int = 2):
     for h in hits:
         src = h.get("source") or ""
         chk = str(h.get("chunk_id") or h.get("id") or "")
-        label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+        label = (
+            f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+        )
         citations.append(label)
 
     return answer, citations
@@ -176,15 +202,16 @@ except Exception as e:
     agent_app = None
 
 
-
 async def _stream_answer_chunks(text: str, delay_s: float = 0.02):
     # naive chunker: one line at a time; adjust as you like
     for line in text.splitlines(True):
         yield line
         await asyncio.sleep(delay_s)
 
+
 # ========= FastAPI app =========
 app = FastAPI(title="AI Shipping Agent", version="0.4")
+
 
 # ========= Schemas =========
 class ChatRequest(BaseModel):
@@ -193,21 +220,26 @@ class ChatRequest(BaseModel):
     tracking: Optional[str] = None
     carrier: Optional[str] = None
 
+
 class ChatResponse(BaseModel):
     answer: str
     citations: List[str]
 
+
 class SearchRequest(BaseModel):
     query: str
     k: int = 5
+
 
 class SearchHit(BaseModel):
     text: str
     source: str
     score: float
 
+
 class SearchResponse(BaseModel):
     results: List[SearchHit]
+
 
 # ========= Endpoints =========
 @app.get("/health")
@@ -216,8 +248,8 @@ def health():
         "status": "ok",
         "base_model": BASE_MODEL,
         "adapter": ADAPTER_ID or "",
-        "agent_enabled": bool(settings.agent_enable),  
-        "agent_loaded": bool(agent_app is not None),   
+        "agent_enabled": bool(settings.agent_enable),
+        "agent_loaded": bool(agent_app is not None),
     }
 
 
@@ -226,7 +258,7 @@ def chat(
     req: ChatRequest,
     agent: Optional[int] = Query(
         default=1 if settings.agent_enable else 0,  # default from settings
-        description="Set 1 to use LangGraph agent"
+        description="Set 1 to use LangGraph agent",
     ),
 ):
     if agent and agent_app is None:
@@ -249,12 +281,15 @@ def chat(
             for h in final_state.get("kb_hits", []):
                 src = h.get("source") or ""
                 chk = str(h.get("chunk_id") or h.get("id") or "")
-                label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+                label = (
+                    f"{src}#{chk}"
+                    if src and chk
+                    else (src or (chk and f"kb#{chk}") or "kb")
+                )
                 citations.append(label)
 
         answer = final_state.get("answer", "")
         return ChatResponse(answer=answer, citations=citations)
-
 
     # ===== Legacy RAG path (existing behavior) =====
     if agent == 0:
@@ -262,7 +297,6 @@ def chat(
             # NEW: offline fallback instead of raising "Model not loaded"
             ans, cits = _offline_legacy_reply(req.message, getattr(req, "top_k", 2))
             return ChatResponse(answer=ans, citations=cits)
-    
 
     hits = vector_search(req.message, req.top_k)
 
@@ -271,19 +305,19 @@ def chat(
     for h in hits:
         src = h.get("source") or ""
         chk = h.get("chunk_id") or h.get("id") or ""
-        label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+        label = (
+            f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+        )
         citations.append(label)
-
-
 
     answer = infer_guarded(
         user_msg=req.message,
-        top_k_context=[c for c in contexts if c][:req.top_k],
+        top_k_context=[c for c in contexts if c][: req.top_k],
         tok=tok_backend,
         model=model_backend,
         provided_tracking=req.tracking,
     )
-    return ChatResponse(answer=answer, citations=citations[:req.top_k])
+    return ChatResponse(answer=answer, citations=citations[: req.top_k])
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -291,14 +325,19 @@ def search_api(req: SearchRequest):
     hits = vector_search(req.query, req.k)
     return {"results": hits}
 
+
 @app.post("/chat/stream")
-def chat_stream(req: ChatRequest, agent: Optional[int] = Query(default=1 if settings.agent_enable else 0)):
+def chat_stream(
+    req: ChatRequest,
+    agent: Optional[int] = Query(default=1 if settings.agent_enable else 0),
+):
     """
     Server-Sent Events (SSE) stream:
       - start   {meta}
       - token   {token}
       - end     {citations}
     """
+
     def legacy_stream():
         # 1) Build retrieval context + citations
         hits = vector_search(req.message, k=getattr(req, "top_k", 2) or 2)
@@ -308,7 +347,11 @@ def chat_stream(req: ChatRequest, agent: Optional[int] = Query(default=1 if sett
             src = h.get("source") or ""
             chk = str(h.get("chunk_id") or h.get("id") or "")
             contexts.append(txt)
-            label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+            label = (
+                f"{src}#{chk}"
+                if src and chk
+                else (src or (chk and f"kb#{chk}") or "kb")
+            )
             citations.append(label)
 
         # 2) Parse tracking ID
@@ -335,11 +378,13 @@ def chat_stream(req: ChatRequest, agent: Optional[int] = Query(default=1 if sett
 
             except Exception:
                 # OFFLINE FALLBACK: build a safe text and stream it in small chunks
-                ans, cits_off = _offline_legacy_reply(req.message, getattr(req, "top_k", 2))
+                ans, cits_off = _offline_legacy_reply(
+                    req.message, getattr(req, "top_k", 2)
+                )
                 text = _ascii_safe(ans or "")
                 CHUNK = 48
                 for i in range(0, len(text), CHUNK):
-                    yield _sse({"token": text[i:i+CHUNK]}, "token")
+                    yield _sse({"token": text[i : i + CHUNK]}, "token")
                 # prefer offline citations if present, else the earlier retrieval labels
                 nonlocal citations
                 if cits_off:
@@ -348,7 +393,6 @@ def chat_stream(req: ChatRequest, agent: Optional[int] = Query(default=1 if sett
             yield _sse({"citations": citations}, "end")
 
         return StreamingResponse(gen(), media_type="text/event-stream")
-
 
     def agent_stream():
         # Keep agent path working; stream in chunks (answer already composed by the graph)
@@ -368,7 +412,11 @@ def chat_stream(req: ChatRequest, agent: Optional[int] = Query(default=1 if sett
             for h in final_state.get("kb_hits", []):
                 src = h.get("source") or ""
                 chk = str(h.get("chunk_id") or h.get("id") or "")
-                label = f"{src}#{chk}" if src and chk else (src or (chk and f"kb#{chk}") or "kb")
+                label = (
+                    f"{src}#{chk}"
+                    if src and chk
+                    else (src or (chk and f"kb#{chk}") or "kb")
+                )
                 citations.append(label)
 
         answer = _ascii_safe(final_state.get("answer", "").strip())
@@ -378,7 +426,7 @@ def chat_stream(req: ChatRequest, agent: Optional[int] = Query(default=1 if sett
             # stream the composed text in small chunks
             CHUNK = 32
             for i in range(0, len(answer), CHUNK):
-                yield _sse({"token": answer[i:i+CHUNK]}, "token")
+                yield _sse({"token": answer[i : i + CHUNK]}, "token")
                 time.sleep(0.01)
             yield _sse({"citations": citations}, "end")
 

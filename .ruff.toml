@@ -1,0 +1,15 @@
+target-version = "py311"
+line-length = 100
+
+# Don't lint notebooks.
+extend-exclude = ["notebooks/**", "**/*.ipynb"]
+
+[lint]
+# Keep Ruff focused on correctness (E/F) and import order (I).
+select = ["E", "F", "I"]
+# Let Black own long lines and whitespace details.
+ignore = ["E203", "E501"]
+
+[lint.per-file-ignores]
+"tests/**" = ["F401"]
+"**/__init__.py" = ["F401"]

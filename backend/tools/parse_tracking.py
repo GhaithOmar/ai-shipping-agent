@@ -1,10 +1,14 @@
 import re
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 # Accept both underscored and compact aliases (case-insensitive)
 CARRIER_ALIASES = [
-    "Shipping_A", "Shipping_B", "Shipping_C",
-    "ShippingA", "ShippingB", "ShippingC",
+    "Shipping_A",
+    "Shipping_B",
+    "Shipping_C",
+    "ShippingA",
+    "ShippingB",
+    "ShippingC",
 ]
 
 # Tokens that LOOK like tracking IDs, including internal hyphens/spaces.
@@ -13,24 +17,22 @@ CARRIER_ALIASES = [
 # This prevents matching words like "Track" before the real ID.
 # Each block must include at least one digit; prevents trailing words like "with" being captured.
 SEPARATED_ID_RE = re.compile(
-    r"\b([A-Z0-9]*\d[A-Z0-9]*(?:[-\s][A-Z0-9]*\d[A-Z0-9]*){0,8})\b",
-    re.IGNORECASE
+    r"\b([A-Z0-9]*\d[A-Z0-9]*(?:[-\s][A-Z0-9]*\d[A-Z0-9]*){0,8})\b", re.IGNORECASE
 )
 
 
-
 # Obvious non-ID patterns to ignore
-DATE_RE     = re.compile(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b")  # e.g., 2025-08-27
-TIME_RE     = re.compile(r"\b\d{1,2}:\d{2}(:\d{2})?\b")
-INVOICE_RE  = re.compile(r"\b(?:INV|ORDER|PO|REF)[-:\s]?\d{3,}\b", re.IGNORECASE)
-PUNCT_ONLY  = re.compile(r"^[\W_]+$")
+DATE_RE = re.compile(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b")  # e.g., 2025-08-27
+TIME_RE = re.compile(r"\b\d{1,2}:\d{2}(:\d{2})?\b")
+INVOICE_RE = re.compile(r"\b(?:INV|ORDER|PO|REF)[-:\s]?\d{3,}\b", re.IGNORECASE)
+PUNCT_ONLY = re.compile(r"^[\W_]+$")
+
 
 def _normalize(token: str) -> str:
     s = token or ""
     # drop a leading word + separators if it appears before the first digit (e.g., "Track 1Z-...")
-    s = re.sub(r'^[A-Za-z]+(?:[\s-]+)(?=\d)', '', s)
+    s = re.sub(r"^[A-Za-z]+(?:[\s-]+)(?=\d)", "", s)
     return re.sub(r"[-\s]", "", s).upper()
-
 
 
 def _looks_like_id(raw: str) -> Tuple[bool, Optional[str]]:
@@ -56,6 +58,7 @@ def _looks_like_id(raw: str) -> Tuple[bool, Optional[str]]:
 
     return True, norm
 
+
 def parse_tracking(text: str) -> Dict:
     """
     Extract carrier alias (if present) and normalize potential tracking IDs.
@@ -70,7 +73,11 @@ def parse_tracking(text: str) -> Dict:
     carrier = None
     for alias in CARRIER_ALIASES:
         if re.search(rf"\b{re.escape(alias)}\b", text or "", flags=re.IGNORECASE):
-            carrier = alias if "Shipping_" in alias else alias.replace("Shipping", "Shipping_")
+            carrier = (
+                alias
+                if "Shipping_" in alias
+                else alias.replace("Shipping", "Shipping_")
+            )
             break
 
     candidates = []

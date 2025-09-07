@@ -1,6 +1,7 @@
 from collections import deque
 from typing import Deque, Dict, List
 
+
 class ShortMemory:
     def __init__(self, max_turns: int = 6):
         self.max_turns = max_turns

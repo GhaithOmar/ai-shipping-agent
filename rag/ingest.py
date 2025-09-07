@@ -4,29 +4,31 @@ Ingestion pipeline: read markdown files -> chunk -> embed (BGE-M3) -> store in Q
 Run:
     python rag/ingest.py
 """
+
 import glob
 import os
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Dict
+from typing import Dict, Iterable, List, Optional
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, PointStruct, VectorParams
 from sentence_transformers import SentenceTransformer
 
 # ----------------------------
 # config
 # ----------------------------
 COLLECTION = "shipping_kb"
-QDRANT_PATH = "qdrant_db"      # persisted embedded db folder
+QDRANT_PATH = "qdrant_db"  # persisted embedded db folder
 EMBED_MODEL_NAME = "BAAI/bge-m3"
-CHUNK_SIZE = 1000              # ~characters
-CHUNK_OVERLAP = 200            # characters
+CHUNK_SIZE = 1000  # ~characters
+CHUNK_OVERLAP = 200  # characters
+
 
 @dataclass
 class DocFile:
     text: str
-    source: str                 # e.g., "company_a_faq.md"
-    carrier: Optional[str]      # e.g., "Shipping_A" if we can infer it
+    source: str  # e.g., "company_a_faq.md"
+    carrier: Optional[str]  # e.g., "Shipping_A" if we can infer it
 
 
 def infer_carrier_from_source(basename: str) -> Optional[str]:
@@ -45,16 +47,20 @@ def read_markdown_files(pattern: str = "rag/data/*.md") -> Iterable[DocFile]:
     """Yield file contents + inferred metadata for each .md under rag/data/."""
     for fp in glob.glob(pattern):
         basename = os.path.basename(fp)
-        if basename.lower() == "readme.md":   # skip README
+        if basename.lower() == "readme.md":  # skip README
             continue
         with open(fp, "r", encoding="utf-8") as f:
             text = (f.read() or "").strip()
         if not text:
             continue
-        yield DocFile(text=text, source=basename, carrier=infer_carrier_from_source(basename))
+        yield DocFile(
+            text=text, source=basename, carrier=infer_carrier_from_source(basename)
+        )
 
 
-def chunk_text(text: str, max_chars: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+def chunk_text(
+    text: str, max_chars: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
+) -> List[str]:
     """
     Simple character-based chunking with overlap.
     Larger chunks = more context; overlap preserves continuity across boundaries.
@@ -106,10 +112,12 @@ def main():
 
             payload: Dict[str, object] = {
                 "text": ch,
-                "source": doc.source,          # REQUIRED for citations
-                "chunk_id": str(per_file_index)  # REQUIRED for citations (stable per file)
+                "source": doc.source,  # REQUIRED for citations
+                "chunk_id": str(
+                    per_file_index
+                ),  # REQUIRED for citations (stable per file)
             }
-            if doc.carrier:                     # add if known (enables carrier filter)
+            if doc.carrier:  # add if known (enables carrier filter)
                 payload["carrier"] = doc.carrier
 
             points.append(

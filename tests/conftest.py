@@ -1,5 +1,7 @@
 # tests/conftest.py
-import os, sys
+import os
+import sys
+
 from dotenv import load_dotenv
 
 # project root on path
