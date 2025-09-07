@@ -43,10 +43,11 @@ jobs:
 
       - name: Type check (mypy)
         run: |
-          # Gate strictly on stable modules:
-          mypy backend/tools backend/agent --ignore-missing-imports
-          # Keep the wide pass non-blocking while types evolve:
-          mypy backend rag || true
+          # Gate strictly on stable modules, with explicit package bases
+          mypy --explicit-package-bases backend/agent backend/tools
+          # Wider pass stays non-blocking while types evolve
+          mypy --explicit-package-bases backend rag || true
+
 
 
       - name: Run tests (smoke only for now) with coverage
