@@ -51,5 +51,4 @@ jobs:
           TOKENIZERS_PARALLELISM: "false"
         run: |
           pytest -q tests/smoke/test_api_smoke.py
-          pytest -q
 
