@@ -1,8 +1,10 @@
-# tests/smoke/test_api_smoke.py
+import json
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from backend.tools.parse_tracking import parse_tracking  # safe import
-import json
+
 
 def offline_generate(user_msg: str, top_k_context=None, provided_tracking=None):
     parsed = parse_tracking(user_msg)
