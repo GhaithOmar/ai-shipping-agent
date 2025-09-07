@@ -1,79 +1,82 @@
-# ----------------------------
-# Stage 1: builder (compile wheels, cache deps)
-# ----------------------------
-FROM python:3.11-slim AS builder
+# ---------- Base image ----------
+FROM python:3.11-slim AS base
 
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
-# System deps for building wheels (add gcc if some libs require it)
+# System deps: tini for proper signal handling, curl for healthcheck,
+# and a few build tools some Python wheels may need.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential curl git \
+    tini curl ca-certificates build-essential git \
  && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /wheels
-
-# Copy only requirements first for better Docker layer caching
-COPY requirements.txt /wheels/requirements.txt
-
-# Build wheels for all deps to speed up installs in the final image
-RUN pip wheel --no-cache-dir -r /wheels/requirements.txt -w /wheels
-
-# ----------------------------
-# Stage 2: runtime (slim, non-root)
-# ----------------------------
-FROM python:3.11-slim AS runtime
-
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    APP_HOME=/app
+    PIP_NO_CACHE_DIR=1 \
+    TOKENIZERS_PARALLELISM=false \
+    HF_HOME=/app/hf_cache
 
-# Minimal OS packages for runtime (add if your libs need more)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl tini \
- && rm -rf /var/lib/apt/lists/*
+# App directory
+WORKDIR /app
 
-# Create non-root user and app dirs
-RUN useradd -m appuser
-WORKDIR ${APP_HOME}
+# Copy only files needed to install deps first (better cache)
+# If you have requirements.txt, we’ll use it; otherwise we’ll install a minimal runtime set later.
+COPY requirements.txt /app/requirements.txt
 
-# Copy prebuilt wheels from builder and install
-COPY --from=builder /wheels /tmp/wheels
-RUN pip install --no-cache-dir --find-links=/tmp/wheels -r /tmp/wheels/requirements.txt \
- && rm -rf /tmp/wheels
+# Try to install from requirements.txt if present
+RUN if [ -f /app/requirements.txt ]; then \
+        python -m pip install --upgrade pip && \
+        pip install --no-cache-dir -r /app/requirements.txt ; \
+    else \
+        echo "No requirements.txt; installing minimal runtime set…" && \
+        python -m pip install --upgrade pip && \
+        pip install --no-cache-dir \
+            fastapi "uvicorn[standard]" pydantic \
+            transformers accelerate peft \
+            sentence-transformers qdrant-client \
+            langchain langgraph ; \
+    fi
 
-# Copy application code (keep order for better caching)
-# We deliberately do NOT copy qdrant_db/ or rag/data/ (mounted at runtime)
-COPY backend/ backend/
-COPY rag/ rag/
-#COPY tests/ tests/
-COPY docker/ docker/
-RUN chmod +x docker/entrypoint.sh
-COPY README.md .
-# helpful for users; safe to include
-COPY .env.example .env.example
+# Copy application code
+# (Your .dockerignore excludes heavy stuff like notebooks, qdrant_db, data, etc.)
+COPY backend/      /app/backend/
+COPY rag/          /app/rag/
+COPY scripts/      /app/scripts/
+COPY docker/       /app/docker/
+COPY warm_agent.py /app/warm_agent.py
+COPY README.md     /app/README.md
+
+# Generate .env.example inside the image (fallback if host file is tricky)
+RUN printf '%s\n' \
+ 'BASE_MODEL=TinyLlama/TinyLlama-1.1B-Chat-v1.0' \
+ 'FALLBACK_BASE=TinyLlama/TinyLlama-1.1B-Chat-v1.0' \
+ 'ADAPTER_ID=' \
+ 'HUGGINGFACE_TOKEN=' \
+ 'HF_TOKEN=' \
+ 'AGENT_OFFLINE=0' \
+ 'AGENT_ENABLE=true' \
+ 'AGENT_TOP_K=4' \
+ 'QDRANT_HOST=127.0.0.1' \
+ 'QDRANT_PORT=6333' \
+ 'QDRANT_COLLECTION=shipping_kb' \
+ 'PORT=8000' \
+ 'TOKENIZERS_PARALLELISM=false' \
+ 'HF_HUB_OFFLINE=0' \
+ 'TRANSFORMERS_OFFLINE=0' \
+ 'HF_HOME=/app/hf_cache' \
+ > /app/.env.example
 
 
+# Ensure entrypoint is executable and LF-normalized (handles CRLF from Windows)
+RUN chmod +x /app/docker/entrypoint.sh \
+ && sed -i 's/\r$//' /app/docker/entrypoint.sh
 
-# Create runtime directories and adjust permissions
-RUN mkdir -p qdrant_db && chown -R appuser:appuser ${APP_HOME}
-USER appuser
-
-# Expose FastAPI port
+# Expose API port
 EXPOSE 8000
 
-# Healthcheck: hit the root or a lightweight ping endpoint if you add one
+# Healthcheck hits /health (your API defines it)
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 
-
-# Use tini as init for proper signal handling
+# Use tini as PID 1 for clean shutdowns
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Entrypoint script will:
-#  1) ingest KB if qdrant_db is empty
-#  2) start uvicorn backend.main:app
-CMD ["bash", "docker/entrypoint.sh"]
+# Launch via entrypoint (starts uvicorn)
+CMD ["bash", "/app/docker/entrypoint.sh"]
