@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
@@ -17,6 +17,7 @@ from backend.tools.rate_quote import rate_quote
 from backend.tools.search_kb import KBHit, format_citations, search_kb
 
 _memory = ShortMemory(max_turns=6)
+Dim3 = Tuple[float, float, float]
 
 
 # Helper function
@@ -165,13 +166,32 @@ def node_tool_router(state: AgentState) -> AgentState:
     if "quote" in needs:
         # naive parse for weight and dims; in real app we would add a tiny parser.
         # for now, assume we extract something later; here we demo with safe defaults and let the model ask for missing info.
+        # --- typed inputs for rate_quote ---
+        origin_cc = cast(str, (state.get("origin_cc") or "JO"))
+        dest_cc = cast(str, (state.get("dest_cc") or "US"))
+
+        weight_raw = state.get("weight_kg", 1.0)
+        try:
+            # mypy: ensure allowed input types to float(...)
+            weight_kg: float = float(cast(Union[str, float, int], weight_raw))
+        except (TypeError, ValueError):
+            weight_kg = 1.0
+
+        dims_raw = state.get("dims_cm")
+        dims_cm: Optional[Dim3] = None
+        if isinstance(dims_raw, (list, tuple)) and len(dims_raw) == 3:
+            try:
+                dims_cm = (float(dims_raw[0]), float(dims_raw[1]), float(dims_raw[2]))
+            except (TypeError, ValueError):
+                dims_cm = None
+
         rate = rate_quote(
-            origin_cc=state.get("origin_cc", "JO"),
-            dest_cc=state.get("dest_cc", "AE"),
-            weight_kg=state.get("weight_kg", 1.0),
-            dims_cm=state.get("dims_cm"),  # (L,W,H) if detected, else None
-            service_level="standard",
+            origin_cc=origin_cc,
+            dest_cc=dest_cc,
+            weight_kg=weight_kg,
+            dims_cm=dims_cm,
         )
+
         state["rate"] = rate
 
     state["citations"] = format_citations(kb_hits)  # list[dict] with 'ref'
