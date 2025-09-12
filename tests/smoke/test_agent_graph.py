@@ -1,15 +1,27 @@
 # tests/smoke/test_agent_graph.py
 import os
+import sys
+import types
 
 def test_agent_smoke():
-    # Ensure offline before any imports that might touch HF/Qdrant
+    # Ensure offline BEFORE any imports that might touch HF/Qdrant
     os.environ["AGENT_OFFLINE"] = "1"
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-    # Import AFTER env is set, so backend.search uses offline dummies
+    # Stub out backend.search to prevent any import-time downloads
+    fake_search = types.ModuleType("backend.search")
+
+    def _search_stub(query: str, k: int = 3):
+        return []  # predictable for smoke tests
+
+    fake_search.search = _search_stub  # type: ignore[attr-defined]
+    sys.modules["backend.search"] = fake_search
+
+    # Safe to import after stubbing
     from backend.tools.parse_tracking import parse_tracking
+    from backend.agent.graph import build_graph, run_agent
 
     # Lightweight offline generator to avoid model usage entirely
     def offline_generate(user_msg, top_k_context, provided_tracking=None):
@@ -25,8 +37,6 @@ def test_agent_smoke():
             bullets.append(f"Using {len(top_k_context)} retrieved context chunks.")
         bullets.append("No live tracking is used; info is handbook-based.")
         return "\n".join(f"- {b}" for b in bullets)
-
-    from backend.agent.graph import build_graph, run_agent
 
     g = build_graph(offline_generate)
     out = run_agent(
