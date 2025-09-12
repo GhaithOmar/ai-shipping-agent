@@ -10,18 +10,6 @@ jobs:
   tests:
     name: Lint & Tests (${{ matrix.os }} / py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    env:
-      # caches
-      PIP_CACHE_DIR: ${{ runner.temp }}/.pip
-      HF_HOME: ${{ runner.temp }}/.hf
-      TRANSFORMERS_CACHE: ${{ runner.temp }}/.hf/transformers
-      HF_DATASETS_CACHE: ${{ runner.temp }}/.hf/datasets
-      TORCH_HOME: ${{ runner.temp }}/.torch
-      # deterministic tests
-      AGENT_OFFLINE: "1"
-      HF_HUB_DISABLE_TELEMETRY: "1"
-      TOKENIZERS_PARALLELISM: "false"
-
     strategy:
       fail-fast: false
       matrix:
@@ -31,6 +19,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        
+      - name: Set cache dirs (portable)
+        shell: bash
+        run: |
+          echo "PIP_CACHE_DIR=$RUNNER_TEMP/pip-cache" >> "$GITHUB_ENV"
+          echo "HF_HOME=$RUNNER_TEMP/hf-cache" >> "$GITHUB_ENV"
+          echo "TRANSFORMERS_CACHE=$RUNNER_TEMP/hf-cache/transformers" >> "$GITHUB_ENV"
+          echo "HF_DATASETS_CACHE=$RUNNER_TEMP/hf-cache/datasets" >> "$GITHUB_ENV"
+          echo "TORCH_HOME=$RUNNER_TEMP/torch-cache" >> "$GITHUB_ENV"
+
 
       - name: Cache HF & Torch
         uses: actions/cache@v4
