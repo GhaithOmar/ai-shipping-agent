@@ -670,6 +670,101 @@ ai-shipping-agent/
 - **No live tracking**: answers are handbook/RAG-based; agent refuses to share direct links.
 - **Image excludes local data** (Qdrant DB, caches, notebooks) by design; they’re mounted at runtime.
 
+# ✅ Day 9 — CI hardening, offline safety & test ratchet
+
+This day focused on **stability, determinism, and release hygiene** so the project is reproducible and easy to contribute to. We:
+- Made the vector search components **offline-safe** (no import-time downloads).
+- Added **unit + smoke tests**, including streaming, and fixed flaky imports.
+- Centralized **offline env flags** for tests and CI.
+- Improved **lint & format** (ruff + black) and resolved mypy issues.
+- Bumped the **coverage gate** and tagged a release.
+
+---
+
+## 🔧 What changed (high level)
+
+- **Mypy stability**: localized ignores for tokenizer calls; removed redefinitions in `main.py`.
+- **Offline-safe search**:
+  - `backend/search.py`: lazy-loads deps only when online; returns `[]` in offline mode.
+  - `backend/tools/search_kb.py`: no heavy imports at module import-time; short-circuits offline; lazy embedder.
+- **Tests**:
+  - `tests/unit/test_parse_tracking.py`: verifies carrier normalization, de-duplication, and numeric filters.
+  - `tests/unit/test_settings.py`: sanity checks for defaults.
+  - `tests/smoke/test_api_smoke.py`: API smoke + coverage.
+  - `tests/smoke/test_stream.py`: SSE streaming smoke.
+  - `tests/smoke/test_agent_graph.py`: bullet‑proof offline via module stubs.
+- **CI**:
+  - Added portable caches and deterministic env flags.
+  - Black/ruff enabled; import blocks organized.
+  - Coverage gate raised (≥ 25% during Day 9 work; target 30% in the tag).
+- **Docs & versioning**:
+  - README badge + `CHANGELOG.md`.
+  - Version bumped to `0.1.1` (Day 9 milestone).
+
+---
+
+## 🧪 Running tests locally (PowerShell)
+
+```pwsh
+# optional: create venv
+python -m venv .venv
+. .venv/Scripts/Activate.ps1
+
+# install
+python -m pip install -U pip
+pip install -r requirements.txt -r requirements-dev.txt
+
+# lint & format
+ruff check .
+black .
+
+# run tests (PowerShell-safe one-liners)
+pytest -q tests/smoke tests/unit --cov=backend --cov=rag `
+  --cov-report=term-missing --cov-report=xml:coverage.xml `
+  --cov-fail-under=25
+
+# type check
+mypy .
+```
+
+> **Note:** Tests and CI run in **offline mode** by default to avoid network downloads.
+> We set: `AGENT_OFFLINE=1`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `TOKENIZERS_PARALLELISM=false`.
+
+---
+
+## 🧰 Key files touched
+
+- `backend/generation.py` — tokenizer call sites stabilized for mypy (scoped ignores).
+- `backend/main.py` — import cleanup; no alias redefinitions.
+- `backend/search.py` — lazy, offline-safe; no import-time HF.
+- `backend/tools/search_kb.py` — lazy, offline-safe embedder; short-circuit offline.
+- `tests/**` — unit + smoke tests; offline stubbing for agent graph.
+- `.github/workflows/ci.yml` — caches & env flags; unified pytest command.
+- `mypy.ini` — localized ignore for `backend.generation` operator errors.
+- `CHANGELOG.md` — release notes for v0.1.1.
+
+---
+
+## 📈 Coverage & gates
+
+- Current coverage: ~35% (varies slightly by OS).
+- Gate: **≥ 25%** (Day 9 baseline); recommended next: **≥ 30%**.
+
+---
+
+## 🏷️ Release
+
+- Bumped `backend.__version__` to **0.1.1**.
+- Suggested tag: `v0.1.1` (created during Day 9).
+- Docker publish job is tag-triggered; if skipped, push a tag like `v0.1.1` to run it.
+
+---
+
+## 🧭 What’s next (teaser for Day 10)
+
+- Raise coverage gate to **35–40%** with 2–3 focused unit tests (no network).
+- Add one online integration test (marked `@slow`, **skipped in CI**).
+- Optional: stabilize Docker publish triggers (tags-only or release events) and push an image.
 
 
 ## 🔮 Limitations & Future Work
