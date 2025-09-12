@@ -45,7 +45,7 @@ def _looks_like_id(raw: str) -> Tuple[bool, Optional[str]]:
     norm = _normalize(raw)
 
     # Length bounds after normalization (tweak if you meet real formats)
-    if not (8 <= len(norm) <= 22):
+    if not (7 <= len(norm) <= 22):
         return False, None
 
     # Must contain digits (avoid matching pure alphabetic words)
@@ -53,7 +53,7 @@ def _looks_like_id(raw: str) -> Tuple[bool, Optional[str]]:
         return False, None
 
     # Filter short pure-digit strings (often years/short refs)
-    if norm.isdigit() and len(norm) < 8:
+    if norm.isdigit() and len(norm) <= 6:
         return False, None
 
     return True, norm

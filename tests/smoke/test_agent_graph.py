@@ -1,3 +1,11 @@
+import os
+
+# Must be set BEFORE importing graph/search to prevent HF downloads
+os.environ["AGENT_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 from backend.agent.graph import build_graph, run_agent
 from backend.tools.parse_tracking import parse_tracking
 
