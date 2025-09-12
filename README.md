@@ -1,4 +1,6 @@
 # AI Shipping Agent 🚀
+![CI](https://github.com/GhaithOmar/ai-shipping-agent/actions/workflows/ci.yml/badge.svg)
+
 
 A production-leaning AI Agent project built step by step.  
 This repo will grow into a full **LLM-powered support assistant** using **LangChain/LangGraph**, **FastAPI**, **Docker**, and a lightly fine-tuned LLM (LoRA).

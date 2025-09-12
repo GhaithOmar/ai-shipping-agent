@@ -1,5 +1,6 @@
 import os
 
+from typing import Any 
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -13,13 +14,9 @@ print("Loading base:", base)
 tok = AutoTokenizer.from_pretrained(base, token=token)
 tok.pad_token = tok.eos_token
 
-model = AutoModelForCausalLM.from_pretrained(
-    base,
-    device_map="cpu",
-    torch_dtype="auto",
-    low_cpu_mem_usage=True,
-    trust_remote_code=True,
-    token=token,
+model: Any = AutoModelForCausalLM.from_pretrained(
+    base, device_map="cpu", torch_dtype="auto",
+    low_cpu_mem_usage=True, trust_remote_code=True, token=token
 )
 
 if adpt:

@@ -1,297 +1,121 @@
-# backend/generation.py
 import os
 import re
 import threading
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import torch
+import torch.nn as nn
 from peft import PeftModel
-
-# --- streaming generation (legacy path) ---
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     GenerationConfig,
     LogitsProcessorList,
     NoBadWordsLogitsProcessor,
+    PreTrainedTokenizerBase,
     TextIteratorStreamer,
 )
 
-# =========================
-# System policy / prompt
-# =========================
 SYSTEM_PREFIX = (
-    "You are a shipping support assistant. "
-    "Ask for missing IDs, never include links, never claim live tracking. "
-    "Keep answers concise with 2–4 bullet steps and defer facts to retrieval."
+    "You are a shipping support assistant. Always ask for missing IDs, never include links, "
+    "never claim live tracking. Keep answers concise with 2–4 bullet steps and defer facts to retrieval."
 )
 
-# Token-level blocks for links/handles/marketing phrasing
-BAD_PATTERNS = [
-    "http://",
-    "https://",
-    "www.",
-    ".com",
-    ".net",
-    ".org",
-    ".io",
-    ".co",
-    ".ly",
-    "@",
-    " DM ",
-    "direct message",
-    "^",
-    " #",
-    " link ",
-    " url ",
-    " website ",
-]
+# Caches
+_TOK: PreTrainedTokenizerBase | None = None
+_MODEL: nn.Module | None = None
+_GEN_CFG: GenerationConfig | None = None
+_PROCESSORS: LogitsProcessorList | None = None
 
-# Singleton cache
-_TOK = None
-_MODEL = None
-
-
+# ---------------------- helpers ----------------------
 def _bf16_supported() -> bool:
     try:
         return bool(getattr(torch.cuda, "is_bf16_supported", lambda: False)())
     except Exception:
         return False
 
+_BAD_PATTERNS = [
+    r"(?i)live\s+tracking",
+    r"(?i)click\s+here",
+]
 
-# --- keep all your imports and globals as-is ---
+def _has_bad_pattern(text: str) -> bool:
+    return any(re.search(p, text) for p in _BAD_PATTERNS)
 
+def _postprocess(text: str) -> str:
+    # minimal guardrails
+    if _has_bad_pattern(text):
+        text = re.sub(r"(?i)click\s+here.*", "", text).strip()
+    # simple bullet cleanup
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    bullets: List[str] = []
+    for ln in lines:
+        if not ln.startswith(("-", "*")):
+            ln = f"- {ln}"
+        bullets.append(ln)
+    # link refusal up top
+    if not any(re.search(r"can('?|no)t share links|cannot share links", b, re.I) for b in bullets):
+        bullets.insert(0, "- I can’t share tracking links. Use the carrier’s official site/app with your waybill number.")
+    # ask for IDs if missing
+    if not any(re.search(r"(tracking|waybill|order)\s*(number|id)", b, re.I) for b in bullets):
+        bullets.insert(0, "- Please share your tracking/waybill number and the carrier (e.g., Shipping_A).")
+    return "\n".join(bullets[:4])
 
-# ... keep all your other globals (_TOK, _MODEL, BAD_PATTERNS, _bf16_supported, etc.) ...
+def _generate_in_thread(m: nn.Module, kwargs: Dict[str, Any]) -> None:
+    m.generate(**kwargs)
 
-
-def load_model_and_tokenizer(
-    base_model_id: str,
-    adapter_id_or_path: Optional[str] = None,
-    device_map: str = "auto",
-    **kwargs,
-) -> Tuple[AutoTokenizer, PeftModel]:
-    """
-    Loads base model (4-bit if CUDA) and attaches a PEFT LoRA adapter.
-    Accepts either adapter_id_or_path=<...> (existing) or adapter_id=<...> (new).
-    Returns (tokenizer, model). Uses singletons to avoid reloading.
-    """
-    global _TOK, _MODEL
-    if _TOK is not None and _MODEL is not None:
+# ---------------------- load ----------------------
+def load_model_and_tokenizer(base_id: str, adapter: Optional[str], hf_token: Optional[str]) -> Tuple[PreTrainedTokenizerBase, nn.Module]:
+    global _TOK, _MODEL, _GEN_CFG, _PROCESSORS
+    if _TOK is not None and _MODEL is not None and _GEN_CFG is not None and _PROCESSORS is not None:
         return _TOK, _MODEL
 
-    # Accept both kw names
-    adapter = kwargs.get("adapter_id") or adapter_id_or_path
+    tok = AutoTokenizer.from_pretrained(base_id, use_fast=True, token=hf_token)
+    tok.pad_token = tok.eos_token
 
-    is_cuda = torch.cuda.is_available()
-    hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+    torch_dtype = torch.bfloat16 if _bf16_supported() else torch.float16
+    base = AutoModelForCausalLM.from_pretrained(
+        base_id,
+        torch_dtype=torch_dtype,
+        low_cpu_mem_usage=True,
+        device_map="auto",
+        trust_remote_code=True,
+        token=hf_token,
+    ).eval()
 
-    # Tokenizer
-    tok = AutoTokenizer.from_pretrained(base_model_id, use_fast=True, token=hf_token)
-    # Ensure we have a pad token
-    if (
-        getattr(tok, "pad_token", None) is None
-        and getattr(tok, "eos_token", None) is not None
-    ):
-        tok.pad_token = tok.eos_token
-
-    # Base model
-    if is_cuda:
-        # 4-bit quant for GPU
-        from transformers import BitsAndBytesConfig
-
-        compute_dtype = torch.bfloat16 if _bf16_supported() else torch.float16
-        bnb = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=compute_dtype,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-        )
-        base = AutoModelForCausalLM.from_pretrained(
-            base_model_id,
-            quantization_config=bnb,
-            device_map=device_map,
-            trust_remote_code=True,
-            token=hf_token,
-        )
-    else:
-        # CPU fallback
-        base = AutoModelForCausalLM.from_pretrained(
-            base_model_id,
-            device_map="cpu",
-            dtype=torch.float32,
-            low_cpu_mem_usage=True,
-            trust_remote_code=True,
-            token=hf_token,
-        )
-
-    # Attach LoRA if provided
     if adapter:
-        model = PeftModel.from_pretrained(base, adapter, token=hf_token).eval()
+        model: nn.Module = PeftModel.from_pretrained(base, adapter, token=hf_token).eval()
     else:
-        model = base.eval()
+        model = base
 
-    # Build logits processors once (keep your original behavior)
-    bad_words_ids = [
-        ids
-        for pat in BAD_PATTERNS
-        if (ids := tok.encode(pat, add_special_tokens=False))
-    ]
-    processors = LogitsProcessorList(
-        [NoBadWordsLogitsProcessor(bad_words_ids, eos_token_id=tok.eos_token_id)]
+    tok_any: Any = tok
+    bad_enc = tok_any.batch_encode_plus(  # type: ignore[operator]
+        ["http", "https", "://", "www."],
+        add_special_tokens=False,
+        return_attention_mask=False,
+        return_token_type_ids=False,
     )
 
-    # Deterministic decoding config
+    bad_words_ids = bad_enc["input_ids"]
+
+    processors = LogitsProcessorList([NoBadWordsLogitsProcessor(bad_words_ids=bad_words_ids, eos_token_id=tok.eos_token_id)])
     gen_cfg = GenerationConfig(
+        max_new_tokens=256,
         do_sample=False,
+        temperature=0.0,
+        repetition_penalty=1.05,
         no_repeat_ngram_size=4,
-        repetition_penalty=1.15,
-        pad_token_id=tok.eos_token_id,
-        eos_token_id=tok.eos_token_id,
-        max_new_tokens=140,
     )
 
-    # Stash for reuse (your existing contract)
-    model._gen_cfg = gen_cfg
-    model._processors = processors
-
-    _TOK, _MODEL = tok, model
+    _TOK, _MODEL, _GEN_CFG, _PROCESSORS = tok, model, gen_cfg, processors
     return tok, model
 
-
-# =========================
-# Intent detection
-# =========================
-TRACK_INTENT = re.compile(
-    r"\b(track(ing)?|status|where\s+(is|’s|'s)|locate|find|scan(s)?|last\s+(two|2)\s+scans?|update|trace|follow\s*up)\b",
-    re.I,
-)
-LINK_INTENT = re.compile(r"\b(link|url|website|web\s*site)\b", re.I)
-DELIVERY_ISSUE_INTENT = re.compile(
-    r"\b(delivered|not\s+received|missing|lost|stolen|proof\s+of\s+delivery|pod|misdeliver(ed)?|left\s+at)\b",
-    re.I,
-)
-ADDRESS_CHANGE_INTENT = re.compile(
-    r"\b(address|postcode|zip|postal\s+code|suite|apt|apartment|unit)\b", re.I
-)
-CUSTOMS_INTENT = re.compile(
-    r"\b(customs|duty|tariff|hs\s*code|clearance|invoice|id|proof\s+of\s+payment|declaration)\b",
-    re.I,
-)
-
-
-def infer_intent(user_text: str) -> str:
-    t = user_text.lower()
-    if LINK_INTENT.search(t):
-        return "link_request"
-    if TRACK_INTENT.search(t):
-        return "tracking"
-    if DELIVERY_ISSUE_INTENT.search(t):
-        return "delivery_issue"
-    if ADDRESS_CHANGE_INTENT.search(t):
-        return "address"
-    if CUSTOMS_INTENT.search(t):
-        return "customs"
-    return "general"
-
-
-def has_any_id(text: str, provided_tracking: Optional[str]) -> bool:
-    if provided_tracking and len(provided_tracking.strip()) >= 8:
-        return True
-    t = text.strip()
-    # AWB/Waybill/Tracking/Order patterns (alnum with 8+ chars)
-    if re.search(
-        r"(?i)\b(awb|waybill|tracking|order)\s*(no\.?|number|id)?\s*[:#-]?\s*[A-Z0-9\-]{8,}",
-        t,
-    ):
-        return True
-    # bare long numbers (8+)
-    if re.search(r"\b\d{8,}\b", t):
-        return True
-    return False
-
-
-def _missing_id(user_text: str, provided_tracking: Optional[str] = None) -> bool:
-    """Intent-aware check: when do we require a tracking/waybill ID?"""
-    intent = infer_intent(user_text)
-    has_id = has_any_id(user_text, provided_tracking)
-
-    # Require ID for these intents
-    if intent in {"tracking", "link_request", "delivery_issue", "address"}:
-        return not has_id
-
-    # For customs/general info, don't force ID unless they actually ask to check status
-    return False
-
-
-def _wants_link(user_text: str) -> bool:
-    return bool(LINK_INTENT.search(user_text))
-
-
-# =========================
-# Post-processing
-# =========================
-def _postprocess(text: str, require_id: bool, refuse_link: bool) -> str:
-    # Strip meta + urls/handles/stock phrases
-    text = re.sub(r"(?i)cutting knowledge date:.*|today date:.*", "", text)
-    text = re.sub(r"https?://\S+|www\.\S+|\S+\.(com|net|org|io|co|ly)\b", "", text)
-    text = re.sub(r"(?i)@\w+|dm|direct message", "", text)
-    text = re.sub(
-        r"(?i)(thanks for reaching out|we'?re here to help|view it here).*", "", text
-    )
-    text = re.sub(r"[\*\~_]{1,3}", "", text)
-
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-
-    # Normalize to "- " bullets
-    bullets = []
-    for ln in lines:
-        m = re.match(r"^\s*\d+[.)]\s*(.+)$", ln)  # "1) foo" / "2. bar" -> "- foo"
-        if m:
-            ln = "- " + m.group(1).strip()
-        if re.match(r"^(\-|\*)\s", ln):
-            ln = re.sub(r"^\*\s", "- ", ln)
-            ln = re.sub(r"\s*[\.·•-]+$", "", ln)
-            bullets.append(ln)
-
-    if not bullets:
-        # Fallback: make bullets from sentences
-        sents = re.split(r"(?<=[.!?])\s+", " ".join(lines))
-        bullets = [f"- {s.strip()}" for s in sents if s.strip()][:4]
-
-    # Insert “ask for ID”
-    if require_id and not any(
-        re.search(r"(tracking|waybill|order)\s*(number|id)", b.lower()) for b in bullets
-    ):
-        bullets.insert(
-            0,
-            "- Please share your tracking/waybill number and the carrier (e.g., Shipping_A).",
-        )
-
-    # Insert explicit link refusal
-    if refuse_link and not any(
-        re.search(r"can('?|no)t share links|cannot share links", b, re.I)
-        for b in bullets
-    ):
-        bullets.insert(
-            0,
-            "- I can’t share tracking links. Use the carrier’s official site/app with your waybill number.",
-        )
-
-    bullets = [
-        b if b.startswith("- ") else "- " + b.lstrip("-* ").strip() for b in bullets[:4]
-    ]
-    return "\n".join(bullets)
-
-
-# =========================
-# Public inference API
-# =========================
+# ---------------------- public APIs ----------------------
 def infer_guarded(
     user_msg: str,
     top_k_context: Optional[List[str]],
-    tok: AutoTokenizer,
-    model: PeftModel,
+    tok: PreTrainedTokenizerBase,
+    model: nn.Module,
     provided_tracking: Optional[str] = None,
 ) -> str:
     messages = [{"role": "system", "content": SYSTEM_PREFIX}]
@@ -300,67 +124,61 @@ def infer_guarded(
         messages.append({"role": "user", "content": ctx})
     messages.append({"role": "user", "content": user_msg})
 
-    # Build prompt as STRING, then tokenize to dict
-    prompt = tok.apply_chat_template(
+    prompt = tok.apply_chat_template(  # type: ignore[attr-defined]
         messages, tokenize=False, add_generation_prompt=True
     )
-    inputs = tok(prompt, return_tensors="pt")
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
+    tok_any: Any = tok
+    enc = tok_any.encode_plus(prompt, return_tensors="pt")  # type: ignore[operator]
+
+    inputs = {k: v.to(next(model.parameters()).device) for k, v in enc.items()}
+
+
+    assert _GEN_CFG is not None and _PROCESSORS is not None
     with torch.inference_mode():
         out = model.generate(
             **inputs,
-            generation_config=model._gen_cfg,
-            logits_processor=model._processors,
+            generation_config=_GEN_CFG,
+            logits_processor=_PROCESSORS,
         )
 
-    # Decode ONLY the new tokens after the prompt
     prompt_len = inputs["input_ids"].shape[1]
     gen_tokens = out[0, prompt_len:]
     raw = tok.decode(gen_tokens, skip_special_tokens=True).strip()
+    return _postprocess(raw)
 
-    return _postprocess(
-        raw,
-        require_id=_missing_id(user_msg, provided_tracking),
-        refuse_link=_wants_link(user_msg),
+def stream_guarded(user_msg: str, top_k_context: List[str], tracking_id: Optional[str] = None):
+    assert _TOK is not None and _MODEL is not None
+    tok = cast(PreTrainedTokenizerBase, _TOK)
+    model = cast(nn.Module, _MODEL)
+
+    messages = [{"role": "system", "content": SYSTEM_PREFIX}]
+    if top_k_context:
+        ctx = "(Context — citations):\n" + "\n".join(f"- {c}" for c in top_k_context)
+        messages.append({"role": "user", "content": ctx})
+    messages.append({"role": "user", "content": user_msg})
+
+    prompt = tok.apply_chat_template(  # type: ignore[attr-defined]
+        messages, tokenize=False, add_generation_prompt=True
     )
+    tok_any: Any = tok
+    enc = tok_any.encode_plus(prompt, return_tensors="pt")  # type: ignore[operator]
+
+    inputs = {k: v.to(next(model.parameters()).device) for k, v in enc.items()}
 
 
-def stream_guarded(user_msg: str, top_k_context: list[str], tracking_id: str | None):
-    """
-    Yields decoded strings as the model generates them.
-    Mirrors infer_guarded() policies: system prefix + link suppression.
-    """
-    global _TOK, _MODEL
-    tok = _TOK
-    model = _MODEL
-    if tok is None or model is None:
-        raise RuntimeError("Model not loaded")
+    streamer = TextIteratorStreamer(cast(AutoTokenizer, tok), skip_prompt=True, skip_special_tokens=True)
 
-    # Build prompt (same structure you use in infer_guarded)
-    sys = SYSTEM_PREFIX
-    ctx = "\n\n".join([c for c in top_k_context if c]) if top_k_context else ""
-    trk = f"\n\n[ParsedTrackingID]: {tracking_id}" if tracking_id else ""
-    prompt = f"{sys}\n\n[Context]\n{ctx}{trk}\n\n[User]\n{user_msg}\n\n[Assistant]\n"
-
-    inputs = tok(prompt, return_tensors="pt")
-    if model.device.type == "cuda":
-        for k in inputs:
-            inputs[k] = inputs[k].to(model.device)
-
-    streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
-
-    gen_kwargs = dict(
+    gen_kwargs: Dict[str, Any] = dict(
         **inputs,
         max_new_tokens=384,
-        do_sample=False,  # deterministic
+        do_sample=False,
         streamer=streamer,
         repetition_penalty=1.05,
         no_repeat_ngram_size=4,
     )
 
-    # Background thread to run generate()
-    t = threading.Thread(target=model.generate, kwargs=gen_kwargs)
+    t = threading.Thread(target=_generate_in_thread, args=(model, gen_kwargs))
     t.start()
 
     for piece in streamer:

@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import time
-from typing import List, Optional
+from typing import List, Optional, Any, Callable
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
@@ -19,6 +19,23 @@ from backend.generation import infer_guarded, load_model_and_tokenizer, stream_g
 # RAG search (kept as-is)
 from backend.search import search as _vector_search
 from backend.settings import settings
+
+import importlib
+
+def _resolve_parse_tracking() -> Callable[[str], Any]:
+    try:
+        mod = importlib.import_module("backend.tools.parse_tracking")
+    except Exception:
+        mod = importlib.import_module("backend.parse_tracking")
+    return getattr(mod, "parse_tracking")
+
+_parse_tracking = _resolve_parse_tracking()
+
+
+
+
+
+
 
 AGENT_OFFLINE = os.getenv("AGENT_OFFLINE", "0") == "1"
 
@@ -41,7 +58,6 @@ HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN", None)
 
 # Optional non-gated fallback if loading the above fails and ADAPTER_ID is empty.
 FALLBACK_BASE = os.getenv("FALLBACK_BASE", "Qwen/Qwen2.5-3B-Instruct")
-
 
 def _ascii_safe(s: str) -> str:
     if not s:
@@ -131,9 +147,8 @@ def _build_agent():
 
     def offline_generate(user_msg, top_k_context, provided_tracking=None):
         # safe, model-free reply
-        from backend.tools.parse_tracking import parse_tracking
 
-        parsed = parse_tracking(user_msg)
+        parsed = _parse_tracking(user_msg)
         ids = parsed.get("ids") or ([provided_tracking] if provided_tracking else [])
         bullets = []
         if not ids:
@@ -165,13 +180,8 @@ def _build_agent():
 def _offline_legacy_reply(user_msg: str, top_k: int = 2):
     # lightweight KB pull
     hits = vector_search(user_msg, k=top_k) if top_k else []
-    try:
-        from backend.tools.parse_tracking import parse_tracking
-    except Exception:
-        # if tools module path differs in your repo, adjust import
-        from backend.parse_tracking import parse_tracking  # fallback
 
-    parsed = parse_tracking(user_msg)
+    parsed = _parse_tracking(user_msg)
     ids = parsed.get("ids") or []
     bullets = []
     if not ids:
@@ -310,6 +320,7 @@ def chat(
         )
         citations.append(label)
 
+    assert tok_backend is not None and model_backend is not None
     answer = infer_guarded(
         user_msg=req.message,
         top_k_context=[c for c in contexts if c][: req.top_k],
@@ -355,11 +366,9 @@ def chat_stream(
             citations.append(label)
 
         # 2) Parse tracking ID
-        try:
-            from backend.tools.parse_tracking import parse_tracking
-        except Exception:
-            from backend.parse_tracking import parse_tracking
-        parsed = parse_tracking(req.message)
+
+        parsed = _parse_tracking(req.message)
+
         ids = parsed.get("ids") or []
         tracking_id = ids[0] if ids else None
 
