@@ -26,6 +26,7 @@ _MODEL: nn.Module | None = None
 _GEN_CFG: GenerationConfig | None = None
 _PROCESSORS: LogitsProcessorList | None = None
 
+
 # ---------------------- helpers ----------------------
 def _bf16_supported() -> bool:
     try:
@@ -33,13 +34,16 @@ def _bf16_supported() -> bool:
     except Exception:
         return False
 
+
 _BAD_PATTERNS = [
     r"(?i)live\s+tracking",
     r"(?i)click\s+here",
 ]
 
+
 def _has_bad_pattern(text: str) -> bool:
     return any(re.search(p, text) for p in _BAD_PATTERNS)
+
 
 def _postprocess(text: str) -> str:
     # minimal guardrails
@@ -53,20 +57,40 @@ def _postprocess(text: str) -> str:
             ln = f"- {ln}"
         bullets.append(ln)
     # link refusal up top
-    if not any(re.search(r"can('?|no)t share links|cannot share links", b, re.I) for b in bullets):
-        bullets.insert(0, "- I can’t share tracking links. Use the carrier’s official site/app with your waybill number.")
+    if not any(
+        re.search(r"can('?|no)t share links|cannot share links", b, re.I)
+        for b in bullets
+    ):
+        bullets.insert(
+            0,
+            "- I can’t share tracking links. Use the carrier’s official site/app with your waybill number.",
+        )
     # ask for IDs if missing
-    if not any(re.search(r"(tracking|waybill|order)\s*(number|id)", b, re.I) for b in bullets):
-        bullets.insert(0, "- Please share your tracking/waybill number and the carrier (e.g., Shipping_A).")
+    if not any(
+        re.search(r"(tracking|waybill|order)\s*(number|id)", b, re.I) for b in bullets
+    ):
+        bullets.insert(
+            0,
+            "- Please share your tracking/waybill number and the carrier (e.g., Shipping_A).",
+        )
     return "\n".join(bullets[:4])
+
 
 def _generate_in_thread(m: nn.Module, kwargs: Dict[str, Any]) -> None:
     m.generate(**kwargs)
 
+
 # ---------------------- load ----------------------
-def load_model_and_tokenizer(base_id: str, adapter: Optional[str], hf_token: Optional[str]) -> Tuple[PreTrainedTokenizerBase, nn.Module]:
+def load_model_and_tokenizer(
+    base_id: str, adapter: Optional[str], hf_token: Optional[str]
+) -> Tuple[PreTrainedTokenizerBase, nn.Module]:
     global _TOK, _MODEL, _GEN_CFG, _PROCESSORS
-    if _TOK is not None and _MODEL is not None and _GEN_CFG is not None and _PROCESSORS is not None:
+    if (
+        _TOK is not None
+        and _MODEL is not None
+        and _GEN_CFG is not None
+        and _PROCESSORS is not None
+    ):
         return _TOK, _MODEL
 
     tok = AutoTokenizer.from_pretrained(base_id, use_fast=True, token=hf_token)
@@ -83,7 +107,9 @@ def load_model_and_tokenizer(base_id: str, adapter: Optional[str], hf_token: Opt
     ).eval()
 
     if adapter:
-        model: nn.Module = PeftModel.from_pretrained(base, adapter, token=hf_token).eval()
+        model: nn.Module = PeftModel.from_pretrained(
+            base, adapter, token=hf_token
+        ).eval()
     else:
         model = base
 
@@ -97,7 +123,13 @@ def load_model_and_tokenizer(base_id: str, adapter: Optional[str], hf_token: Opt
 
     bad_words_ids = bad_enc["input_ids"]
 
-    processors = LogitsProcessorList([NoBadWordsLogitsProcessor(bad_words_ids=bad_words_ids, eos_token_id=tok.eos_token_id)])
+    processors = LogitsProcessorList(
+        [
+            NoBadWordsLogitsProcessor(
+                bad_words_ids=bad_words_ids, eos_token_id=tok.eos_token_id
+            )
+        ]
+    )
     gen_cfg = GenerationConfig(
         max_new_tokens=256,
         do_sample=False,
@@ -108,6 +140,7 @@ def load_model_and_tokenizer(base_id: str, adapter: Optional[str], hf_token: Opt
 
     _TOK, _MODEL, _GEN_CFG, _PROCESSORS = tok, model, gen_cfg, processors
     return tok, model
+
 
 # ---------------------- public APIs ----------------------
 def infer_guarded(
@@ -132,7 +165,6 @@ def infer_guarded(
 
     inputs = {k: v.to(next(model.parameters()).device) for k, v in enc.items()}
 
-
     assert _GEN_CFG is not None and _PROCESSORS is not None
     with torch.inference_mode():
         out = model.generate(
@@ -146,7 +178,10 @@ def infer_guarded(
     raw = tok.decode(gen_tokens, skip_special_tokens=True).strip()
     return _postprocess(raw)
 
-def stream_guarded(user_msg: str, top_k_context: List[str], tracking_id: Optional[str] = None):
+
+def stream_guarded(
+    user_msg: str, top_k_context: List[str], tracking_id: Optional[str] = None
+):
     assert _TOK is not None and _MODEL is not None
     tok = cast(PreTrainedTokenizerBase, _TOK)
     model = cast(nn.Module, _MODEL)
@@ -165,8 +200,9 @@ def stream_guarded(user_msg: str, top_k_context: List[str], tracking_id: Optiona
 
     inputs = {k: v.to(next(model.parameters()).device) for k, v in enc.items()}
 
-
-    streamer = TextIteratorStreamer(cast(AutoTokenizer, tok), skip_prompt=True, skip_special_tokens=True)
+    streamer = TextIteratorStreamer(
+        cast(AutoTokenizer, tok), skip_prompt=True, skip_special_tokens=True
+    )
 
     gen_kwargs: Dict[str, Any] = dict(
         **inputs,

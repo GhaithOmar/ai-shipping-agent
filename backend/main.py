@@ -1,11 +1,11 @@
 # backend/main.py
 import asyncio
+import importlib
 import json
 import logging
 import os
 import time
 from typing import Any, Callable, List, Optional
-
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
@@ -21,7 +21,6 @@ from backend.generation import (
 from backend.search import search as _vector_search
 from backend.settings import settings
 
-import importlib
 
 def _resolve_parse_tracking() -> Callable[[str], Any]:
     try:
@@ -30,12 +29,8 @@ def _resolve_parse_tracking() -> Callable[[str], Any]:
         mod = importlib.import_module("backend.parse_tracking")
     return getattr(mod, "parse_tracking")
 
+
 _parse_tracking = _resolve_parse_tracking()
-
-
-
-
-
 
 
 AGENT_OFFLINE = os.getenv("AGENT_OFFLINE", "0") == "1"
@@ -59,6 +54,7 @@ HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN", None)
 
 # Optional non-gated fallback if loading the above fails and ADAPTER_ID is empty.
 FALLBACK_BASE = os.getenv("FALLBACK_BASE", "Qwen/Qwen2.5-3B-Instruct")
+
 
 def _ascii_safe(s: str) -> str:
     if not s:

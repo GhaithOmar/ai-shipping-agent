@@ -56,9 +56,13 @@ jobs:
 
       - name: Ruff (auto-fix import order)
         run: ruff check . --select I --fix
-        
+
       - name: Lint (ruff)
         run: ruff check .
+
+      - name: Black (auto-format working copy)
+        run: black .
+
 
       - name: Format check (black)
         run: black --check .
