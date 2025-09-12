@@ -1,12 +1,9 @@
+# backend/tools/search_kb.py
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import FieldCondition, Filter, MatchValue
-from sentence_transformers import SentenceTransformer
+from typing import Any, Dict, List
 
 # If you later add qdrant_path to Settings, you can import it there.
 # For now we read env/path directly to stay decoupled.
@@ -15,25 +12,65 @@ QDRANT_PATH = os.getenv("QDRANT_PATH", "qdrant_db")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "127.0.0.1")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 
-_EMBEDDER = None
-_QDRANT: Optional[QdrantClient] = None
+# Lazy singletons (None until first online use)
+_EMBEDDER: Any | None = None
+_QDRANT: Any | None = None
 
 
-def _get_embedder() -> SentenceTransformer:
+def _is_offline() -> bool:
+    """Decide offline at call-time so tests/CI can set ENV late."""
+    return (
+        os.environ.get("AGENT_OFFLINE") == "1"
+        or os.environ.get("HF_HUB_OFFLINE") == "1"
+        or os.environ.get("TRANSFORMERS_OFFLINE") == "1"
+    )
+
+
+def _get_embedder():
+    """
+    Lazily load a SentenceTransformer only when online.
+    In offline/CI, return a lightweight dummy with the same encode() surface.
+    """
     global _EMBEDDER
-    if _EMBEDDER is None:
-        _EMBEDDER = SentenceTransformer("BAAI/bge-m3")
+    if _EMBEDDER is not None:
+        return _EMBEDDER
+
+    if _is_offline():
+        # Zero-download dummy
+        import numpy as np
+
+        class _DummyEmbedder:
+            def encode(self, texts, **kwargs):
+                if isinstance(texts, str):
+                    texts = [texts]
+                # fixed-size zero vectors; exact width doesn't matter for dummy path
+                return np.zeros((len(texts), 384), dtype=np.float32)
+
+        _EMBEDDER = _DummyEmbedder()
+        return _EMBEDDER
+
+    # Online path: import lazily to avoid import-time downloads in CI
+    from sentence_transformers import SentenceTransformer
+
+    _EMBEDDER = SentenceTransformer("BAAI/bge-m3")
     return _EMBEDDER
 
 
-def _get_qdrant() -> Optional[QdrantClient]:
+def _get_qdrant():
     """
     Prefer embedded (path) if folder exists or env set; else try host:port.
-    Return None if neither is available.
+    Return None if neither is available or if construction fails.
+    Lazily import QdrantClient to avoid heavy imports at module import-time.
     """
     global _QDRANT
     if _QDRANT is not None:
         return _QDRANT
+
+    # Import here, not at module import-time
+    try:
+        from qdrant_client import QdrantClient  # type: ignore
+    except Exception:
+        return None
 
     try:
         if QDRANT_PATH and os.path.isdir(QDRANT_PATH):
@@ -63,13 +100,23 @@ def search_kb(query: str, k: int = 4, carrier: str | None = None) -> List[KBHit]
     """
     Semantic search over the shipping_kb collection.
     Returns top-k hits with text, score, source (filename/url), and chunk_id if present.
-    If no Qdrant backend is reachable, returns an empty list (agent can still respond).
+    If offline or no Qdrant backend is reachable, returns an empty list (agent can still respond).
     """
+    # Short-circuit completely in offline/CI runs
+    if _is_offline():
+        return []
+
     cli = _get_qdrant()
     if cli is None:
         return []
 
     emb = _get_embedder().encode(query, normalize_embeddings=True).tolist()
+
+    # Import filter models lazily to keep module import light
+    try:
+        from qdrant_client.http.models import FieldCondition, Filter, MatchValue  # type: ignore
+    except Exception:  # pragma: no cover (if qdrant models missing)
+        return []
 
     qfilter = None
     if carrier:
