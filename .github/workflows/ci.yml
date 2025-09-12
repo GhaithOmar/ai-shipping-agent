@@ -80,11 +80,11 @@ jobs:
           TRANSFORMERS_OFFLINE: "1"
           TOKENIZERS_PARALLELISM: "false"
         run: >
-          pytest -q tests/smoke/test_api_smoke.py
+          pytest -q tests/smoke tests/unit
           --cov=backend --cov=rag
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
-          --cov-fail-under=10
+          --cov-fail-under=20
 
 
       - name: Run tests with coverage (Unix)
@@ -95,11 +95,11 @@ jobs:
           TRANSFORMERS_OFFLINE: "1"
           TOKENIZERS_PARALLELISM: "false"
         run: >
-          pytest -q tests/smoke/test_api_smoke.py
+          pytest -q tests/smoke tests/unit
           --cov=backend --cov=rag
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
-          --cov-fail-under=10
+          --cov-fail-under=20
 
       - name: Upload coverage.xml
         uses: actions/upload-artifact@v4

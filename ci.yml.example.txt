@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  tests:
     name: Lint & Tests (${{ matrix.os }} / py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -19,6 +19,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        
+      - name: Set cache dirs (portable)
+        shell: bash
+        run: |
+          echo "PIP_CACHE_DIR=$RUNNER_TEMP/pip-cache" >> "$GITHUB_ENV"
+          echo "HF_HOME=$RUNNER_TEMP/hf-cache" >> "$GITHUB_ENV"
+          echo "TRANSFORMERS_CACHE=$RUNNER_TEMP/hf-cache/transformers" >> "$GITHUB_ENV"
+          echo "HF_DATASETS_CACHE=$RUNNER_TEMP/hf-cache/datasets" >> "$GITHUB_ENV"
+          echo "TORCH_HOME=$RUNNER_TEMP/torch-cache" >> "$GITHUB_ENV"
+
+
+      - name: Cache HF & Torch
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.HF_HOME }}
+            ${{ env.TORCH_HOME }}
+          key: ${{ runner.os }}-hf-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-hf-
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,27 +62,53 @@ jobs:
         run: black --check .
 
       - name: Type check (mypy)
-        run: |
-          # Gate strictly on stable modules, with explicit package bases
-          mypy --explicit-package-bases backend/agent backend/tools
-          # Wider pass stays non-blocking while types evolve
-          mypy --explicit-package-bases backend rag || true
+        run: mypy .
 
 
-
-      - name: Run tests (smoke only) with scoped coverage
+      - name: Run tests with coverage (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         env:
           AGENT_OFFLINE: "1"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
           TOKENIZERS_PARALLELISM: "false"
-        run: pytest -q tests/smoke/test_api_smoke.py --cov=backend.tools.parse_tracking --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+        run: >
+          pytest -q tests/smoke/test_api_smoke.py
+          --cov=backend --cov=rag
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=10
+
+
+      - name: Run tests with coverage (Unix)
+        if: runner.os != 'Windows'
+        env:
+          AGENT_OFFLINE: "1"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          TOKENIZERS_PARALLELISM: "false"
+        run: >
+          pytest -q tests/smoke/test_api_smoke.py
+          --cov=backend --cov=rag
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=10
+
+      - name: Upload coverage.xml
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.xml
+
+
+
 
 
 
   docker-build:
     name: Docker Build (no push)
-    needs: [test]           # wait for lint & tests to pass
+    needs: [tests]           # wait for lint & tests to pass
     runs-on: ubuntu-latest
 
     steps:
@@ -90,7 +136,7 @@ jobs:
   docker-publish:
     name: Docker Publish (GHCR on tag)
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, docker-build]
+    needs: [tests, docker-build]
     runs-on: ubuntu-latest
     permissions:
       contents: read
