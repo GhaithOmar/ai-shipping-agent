@@ -1,8 +1,10 @@
 import os
-os.environ["AGENT_OFFLINE"] = "1"  # avoid model load in tests
+os.environ["AGENT_OFFLINE"] = "1"  # set before importing app
 
 from fastapi.testclient import TestClient
-from backend.main import app  # <-- import your real app
+
+from backend.main import app
+
 
 client = TestClient(app)
 

@@ -19,7 +19,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        
+
       - name: Set cache dirs (portable)
         shell: bash
         run: |
@@ -54,7 +54,9 @@ jobs:
           pip install -r requirements.txt || echo "no requirements.txt"
           pip install -r requirements-dev.txt || echo "no requirements-dev.txt"
 
-
+      - name: Ruff (auto-fix import order)
+        run: ruff check . --select I --fix
+        
       - name: Lint (ruff)
         run: ruff check .
 

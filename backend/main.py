@@ -4,7 +4,8 @@ import json
 import logging
 import os
 import time
-from typing import List, Optional, Any, Callable
+from typing import Any, Callable, List, Optional
+
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
@@ -12,11 +13,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.agent.graph import build_graph, run_agent
-
-# Guarded generation + loader
-from backend.generation import infer_guarded, load_model_and_tokenizer, stream_guarded
-
-# RAG search (kept as-is)
+from backend.generation import (
+    infer_guarded,
+    load_model_and_tokenizer,
+    stream_guarded,
+)
 from backend.search import search as _vector_search
 from backend.settings import settings
 
