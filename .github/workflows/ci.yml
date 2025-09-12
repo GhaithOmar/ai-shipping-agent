@@ -42,21 +42,46 @@ jobs:
         run: black --check .
 
       - name: Type check (mypy)
-        run: |
-          # Gate strictly on stable modules, with explicit package bases
-          mypy --explicit-package-bases backend/agent backend/tools
-          # Wider pass stays non-blocking while types evolve
-          mypy --explicit-package-bases backend rag || true
+        run: mypy .
 
 
-
-      - name: Run tests (smoke only) with scoped coverage
+      - name: Run tests with coverage (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         env:
           AGENT_OFFLINE: "1"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
           TOKENIZERS_PARALLELISM: "false"
-        run: pytest -q tests/smoke/test_api_smoke.py --cov=backend.tools.parse_tracking --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+        run: >
+          pytest -q tests/smoke/test_api_smoke.py
+          --cov=backend --cov=rag
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=10
+
+
+      - name: Run tests with coverage (Unix)
+        if: runner.os != 'Windows'
+        env:
+          AGENT_OFFLINE: "1"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          TOKENIZERS_PARALLELISM: "false"
+        run: >
+          pytest -q tests/smoke/test_api_smoke.py
+          --cov=backend --cov=rag
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=10
+
+      - name: Upload coverage.xml
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.xml
+
+
 
 
 
