@@ -10,16 +10,41 @@ def test_agent_smoke():
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-    # Stub out backend.search to prevent any import-time downloads
+    # ---- Hard stubs to prevent any download attempts ----
+    # Stub sentence_transformers
+    st_mod = types.ModuleType("sentence_transformers")
+    import numpy as np
+
+    class _StubSentenceTransformer:
+        def __init__(self, *args, **kwargs):
+            pass
+        def encode(self, texts, **kwargs):
+            if isinstance(texts, str):
+                texts = [texts]
+            return np.zeros((len(texts), 384), dtype=np.float32)
+
+    st_mod.SentenceTransformer = _StubSentenceTransformer  # type: ignore[attr-defined]
+    sys.modules["sentence_transformers"] = st_mod
+
+    # Stub qdrant_client
+    qc_mod = types.ModuleType("qdrant_client")
+    class _StubQdrantClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def search(self, *args, **kwargs):
+            return []
+    qc_mod.QdrantClient = _StubQdrantClient  # type: ignore[attr-defined]
+    sys.modules["qdrant_client"] = qc_mod
+
+    # Optional: also stub backend.search (belt-and-suspenders)
     fake_search = types.ModuleType("backend.search")
-
     def _search_stub(query: str, k: int = 3):
-        return []  # predictable for smoke tests
-
+        return []
     fake_search.search = _search_stub  # type: ignore[attr-defined]
     sys.modules["backend.search"] = fake_search
+    # -----------------------------------------------------
 
-    # Safe to import after stubbing
+    # Safe to import AFTER stubbing
     from backend.tools.parse_tracking import parse_tracking
     from backend.agent.graph import build_graph, run_agent
 
