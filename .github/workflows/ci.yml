@@ -107,8 +107,28 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: coverage.xml
 
+  docker-smoke:
+    name: Docker smoke (Ubuntu)
+    needs: [tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Build image
+        run: docker build -t ai-shipping-agent:ci .
 
+      - name: Run container
+        run: |
+          docker run -d --rm -p 8000:8000 \
+            -e AGENT_OFFLINE=1 \
+            --name app ai-shipping-agent:ci
+          # wait a bit for startup
+          for i in {1..20}; do
+            curl -fsS http://localhost:8000/health && break || sleep 1
+          done
+
+      - name: Healthcheck
+        run: curl -fsS http://localhost:8000/health | grep '"status":"ok"'
 
 
 
