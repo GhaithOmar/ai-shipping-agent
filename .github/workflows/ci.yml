@@ -84,7 +84,8 @@ jobs:
           --cov=backend --cov=rag
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
-          --cov-fail-under=25
+          --cov-fail-under=30
+
 
 
       - name: Run tests with coverage (Unix)
@@ -99,7 +100,8 @@ jobs:
           --cov=backend --cov=rag
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
-          --cov-fail-under=25
+          --cov-fail-under=30
+
 
       - name: Upload coverage.xml
         uses: actions/upload-artifact@v4
