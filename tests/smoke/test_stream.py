@@ -1,8 +1,11 @@
 import os
+
 os.environ["AGENT_OFFLINE"] = "1"
 
 from fastapi.testclient import TestClient
+
 from backend.main import app
+
 
 def test_stream_chat():
     client = TestClient(app)

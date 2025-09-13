@@ -760,48 +760,97 @@ mypy .
 
 ---
 
-## 🧭 What’s next (teaser for Day 10)
+## ✅ Day 10 — Final Polish
 
-- Raise coverage gate to **35–40%** with 2–3 focused unit tests (no network).
-- Add one online integration test (marked `@slow`, **skipped in CI**).
-- Optional: stabilize Docker publish triggers (tags-only or release events) and push an image.
+Today we wrapped up the project with final tests, docs polish, and release hygiene.
 
+### What We Did
+- **Coverage**: Added micro unit tests (`rate_quote`, `ShortMemory`, optional `estimate_eta`) → coverage ≈ **45%**.
+- **Integration Test**: Added one **online** test, gated by `RUN_ONLINE_TESTS=1` and marked `@slow`, **skipped in CI**.
+- **Docs**: Updated README with offline mode notes, test commands, and how to opt into online tests.
+- **Release Hygiene**: Bumped version to `0.1.1`; CHANGELOG updated. Docker publish remains tag-triggered.
 
-## 🔮 Limitations & Future Work
+### Test Notes
+- **Offline by default** → CI and local runs set:
+  ```env
+  AGENT_OFFLINE=1
+  HF_HUB_OFFLINE=1
+  TRANSFORMERS_OFFLINE=1
+  TOKENIZERS_PARALLELISM=false
+  ```
+- **Coverage run** (PowerShell):
+  ```powershell
+  pytest -q tests/smoke tests/unit `
+    --cov=backend --cov=rag `
+    --cov-report=term-missing `
+    --cov-report=xml:coverage.xml `
+    --cov-fail-under=35 -m "not slow"
+  ```
+- **Online test** (skipped in CI):
+  ```powershell
+  $env:RUN_ONLINE_TESTS="1"
+  Remove-Item Env:\AGENT_OFFLINE, Env:\HF_HUB_OFFLINE, Env:\TRANSFORMERS_OFFLINE -ErrorAction SilentlyContinue
+  pytest -q tests/integration -m slow
+  ```
 
-This project was built as a **portfolio showcase** to demonstrate the end-to-end design of an AI shipping support agent. While it integrates retrieval, fine-tuned generation, and agent orchestration, there are some known limitations and clear paths for future work.
+---
 
-### 📉 Current Limitations
-- **Data realism**  
-  - FAQ knowledge base content is **synthetic**, generated to resemble real carrier FAQs and policies.  
-  - Fine-tuning data combines public **Customer Support Twitter (Kaggle)** and **Bitext datasets**, with preprocessing for PII scrub + carrier aliasing.  
-  - These datasets approximate real support conversations but are **not production carrier data**.
+## 📂 Project Structure (Final — Day 10)
 
-- **Model deployment**  
-  - The LoRA-fine-tuned **Llama-3.1-8B Instruct** is tested successfully offline (Colab / local GPU).  
-  - Due to GPU cost constraints, the LoRA adapter is **not hosted live**. Online demos may instead route to a base model API (e.g., Together/Fireworks) while preserving the pipeline.
+```text
+ai-shipping-agent/
+├── backend/
+│   ├── main.py              # FastAPI app
+│   ├── generation.py        # Guarded inference + LoRA adapters
+│   ├── settings.py          # Env-based settings
+│   ├── search.py            # Legacy retriever
+│   ├── agent/
+│   │   ├── graph.py         # LangGraph agent
+│   │   └── memory.py        # Short-term memory
+│   └── tools/
+│       ├── search_kb.py     # Qdrant retriever
+│       ├── parse_tracking.py# Tracking ID parser
+│       ├── estimate_eta.py  # ETA rules
+│       └── rate_quote.py    # Rate quoting tool
+├── rag/
+│   └── ingest.py            # Markdown → embeddings → Qdrant
+├── qdrant_db/               # Local vector store
+├── tests/
+│   ├── unit/                # Micro unit tests (rate_quote, memory, etc.)
+│   ├── integration/         # Online gated test
+│   ├── smoke/               # Offline smoke tests
+│   └── conftest.py          # Forces offline env in tests
+├── docker/
+│   └── entrypoint.sh        # Boot logic
+├── Dockerfile
+├── docker-compose.yml
+├── .github/workflows/ci.yml # Lint/tests → docker build → publish on tag → release
+├── .env.example
+├── requirements.txt
+├── CHANGELOG.md
+└── README.md
+```
 
-- **Evaluation**  
-  - Current testing relies on smoke tests and qualitative inspection.  
-  - No large-scale **RAGAS** or structured human evaluation has been performed yet.
+---
 
-### 🚀 Future Work
-- **Data improvements** → Incorporate real carrier datasets (FAQs, scan events, policies) for higher realism.  
-- **Scalable deployment** → Host fine-tuned model + retriever via GPU cloud infra (AWS/GCP/RunPod) with Docker/K8s.  
-- **Evaluation framework** → Add automated metrics (context precision/recall, answer faithfulness) and human eval.  
-- **Additional tools** → Extend agent with rate quote, pickup scheduling, and customs clearance calculators.  
-- **Monitoring & guardrails** → Add observability, tracing, and stronger safety filters for production reliability.  
+## 🔒 Limitations (Final)
+
+- **Data realism**: KB and training data are synthetic + public datasets (Bitext, Twitter). Not production carrier data.
+- **Model deployment**: LoRA fine-tuned Llama-3.1-8B tested offline (Colab/local GPU). Adapters not hosted live.
+- **Evaluation**: No large-scale eval (RAGAS/human eval). Only smoke/unit tests and manual inspection.
+- **Docker publish**: Requires tagging (e.g., `git tag v0.1.1 && git push origin v0.1.1`) to push to GHCR.
 
 ---
 
 ## 📌 Project Status
 
-This repository represents a **research prototype and learning project**, not a production-ready system.  
-It demonstrates the following end-to-end skills:  
-- Data curation & preprocessing (synthetic + public datasets).  
-- LoRA fine-tuning on Llama-3.1-8B with guardrails.  
-- RAG integration with Qdrant + semantic search.  
-- Agent orchestration with LangGraph and tool-calling.  
-- FastAPI backend + Docker packaging.  
+This repository now demonstrates end-to-end:
+- Data preprocessing & LoRA fine-tuning.
+- Guarded inference with adapter injection.
+- Retrieval-Augmented Generation (RAG) with Qdrant.
+- LangGraph-based AI Agent orchestration.
+- FastAPI backend with Docker orchestration and CI/CD.
 
-⚠️ **Disclaimer:** Since the project uses synthetic and public datasets, and the fine-tuned model is not hosted live, results should be considered illustrative only.  
+⚠️ **Disclaimer:** This is a research/portfolio project — not production.  
+It showcases the design and engineering skills required to ship an AI support agent, with offline safety and reproducibility.
+

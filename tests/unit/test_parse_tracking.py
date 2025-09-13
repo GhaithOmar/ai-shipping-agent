@@ -1,4 +1,5 @@
 import os
+
 os.environ["AGENT_OFFLINE"] = "1"  # ensure offline in unit tests
 
 try:

@@ -9,8 +9,8 @@ CI/offline safe:
 - If online, we lazily import and cache the real deps on first use.
 """
 
-from typing import Any, Dict, List
 import os
+from typing import Any, Dict, List
 
 COLLECTION = "shipping_kb"
 QDRANT_PATH = "qdrant_db"

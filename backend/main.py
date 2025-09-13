@@ -107,8 +107,8 @@ def _boot():
     global tok_backend, model_backend
     try:
         tok_backend, model_backend = load_model_and_tokenizer(
-            base_model_id=BASE_MODEL,
-            adapter_id=ADAPTER_ID if ADAPTER_ID else None,
+            base_id=BASE_MODEL,
+            adapter=ADAPTER_ID if ADAPTER_ID else None,
             hf_token=HF_TOKEN,
         )
         log.info(f"Loaded base={BASE_MODEL} adapter={ADAPTER_ID or 'None'}")
@@ -118,14 +118,20 @@ def _boot():
         if not ADAPTER_ID:
             try:
                 tok_backend, model_backend = load_model_and_tokenizer(
-                    base_model_id=FALLBACK_BASE,
-                    adapter_id=None,
+                    base_id=FALLBACK_BASE,
+                    adapter=None,
                     hf_token=HF_TOKEN,
                 )
                 log.info(f"Loaded fallback base={FALLBACK_BASE}")
             except Exception as ee:
-                log.exception(f"Fallback load failed: {ee}")
-                raise
+                 log.exception(f"Fallback load failed: {ee}")
+                 # >>> Soft-degrade: continue without a model
+                 log.warning("Continuing without a model; legacy/agent will use offline generator.")
+                 tok_backend, model_backend = None, None
+        else:
+            # >>> Soft-degrade when user explicitly set ADAPTER_ID but we can't load
+            log.warning("Adapter requested but load failed; continuing without a model.")
+            tok_backend, model_backend = None, None
 
 
 if not AGENT_OFFLINE:

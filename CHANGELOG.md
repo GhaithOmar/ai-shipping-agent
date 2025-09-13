@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2] - 2025-09-13
+- Tests: +unit (rate_quote, memory) and gated online integration test (@slow, skipped in CI)
+- Coverage: ~45% locally; CI gate stays at 30–35%
+- Docs: README Day 10 final polish + offline mode & testing notes
+- Robustness: backend.main soft-degrades when model load fails (offline path)
+
+
 ## [0.1.1] - 2025-09-12
 ### Added
 - CI caches (pip, HF, torch) and deterministic env flags.
