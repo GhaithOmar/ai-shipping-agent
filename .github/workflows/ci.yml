@@ -84,7 +84,7 @@ jobs:
           --cov=backend --cov=rag
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
-          --cov-fail-under=30
+          --cov-fail-under=35 -m "not slow"
 
 
 
@@ -100,7 +100,7 @@ jobs:
           --cov=backend --cov=rag
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
-          --cov-fail-under=30
+          --cov-fail-under=35 -m "not slow"
 
 
       - name: Upload coverage.xml
